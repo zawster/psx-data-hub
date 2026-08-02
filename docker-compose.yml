@@ -1,0 +1,48 @@
+services:
+  api:
+    build: .
+    command: uvicorn psx_data_hub.main:app --host 0.0.0.0 --port 8000
+    restart: unless-stopped
+    env_file:
+      - .env.example
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+
+  worker:
+    build: .
+    command: psx-data-hub-worker
+    restart: unless-stopped
+    env_file:
+      - .env.example
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - api
+
+  api-smoke:
+    build: .
+    command: sh -c "python scripts/seed_mock_data.py && uvicorn psx_data_hub.main:app --host 0.0.0.0 --port 8000"
+    profiles: ["smoke"]
+    env_file:
+      - .env.smoke
+    volumes:
+      - ./data:/app/data
+    ports:
+      - "8000:8000"
+
+  smoke-check:
+    build: .
+    command: sh -c "python -m pip install --no-cache-dir -e .[dev] && python scripts/wait_for.py --base-url http://api-smoke:8000 --timeout 120 && python -m pytest tests/test_smoke_contract.py -q"
+    profiles: ["smoke"]
+    working_dir: /app
+    env_file:
+      - .env.smoke
+    environment:
+      PSX_API_BASE_URL: "http://api-smoke:8000"
+      PYTHONPATH: /app/src
+    volumes:
+      - ./data:/app/data
+    depends_on:
+      - api-smoke

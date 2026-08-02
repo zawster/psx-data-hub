@@ -1,0 +1,14 @@
+.venv
+__pycache__
+*.pyc
+.pytest_cache
+.ruff_cache
+/.idea
+/.vscode
+/data
+*.db
+*.sqlite
+*.sqlite3
+.env
+dist/
+build/
