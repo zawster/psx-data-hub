@@ -114,6 +114,12 @@ $env:PYTHONPATH='src'
 python -m pytest -q
 ```
 
+### Development workflow
+
+- `main` is production.
+- Make all changes in `dev`.
+- Open PRs from `dev` to `main`.
+
 Docker smoke profile:
 
 ```bash

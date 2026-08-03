@@ -12,7 +12,7 @@ services:
 
   worker:
     build: .
-    command: psx-data-hub-worker
+    command: sh -c "python -m psx_data_hub.worker"
     restart: unless-stopped
     env_file:
       - .env.example
@@ -29,8 +29,6 @@ services:
       - .env.smoke
     volumes:
       - ./data:/app/data
-    ports:
-      - "8000:8000"
 
   smoke-check:
     build: .
