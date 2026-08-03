@@ -1,19 +1,28 @@
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from typing import Iterable
 
 from sqlalchemy import and_, delete, func, select
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from psx_data_hub.providers.base import EodSnapshot, QuoteSnapshot, TimeseriesPoint
 from psx_data_hub.storage import models
 
 
+def _utcnow() -> datetime:
+    """Return an aware UTC datetime. Prefer this over datetime.utcnow()."""
+    return datetime.now(timezone.utc)
+
+
 def is_stale(threshold_seconds: int, timestamp: datetime | None) -> bool:
     if not timestamp:
         return True
-    now = datetime.now(timestamp.tzinfo) if timestamp.tzinfo else datetime.utcnow()
+    if timestamp.tzinfo is None:
+        # Treat naive timestamps as UTC — this is how everything gets stored.
+        timestamp = timestamp.replace(tzinfo=timezone.utc)
+    now = _utcnow()
     return (now - timestamp).total_seconds() > threshold_seconds
 
 
@@ -52,6 +61,31 @@ class DataRepository:
         )
         result = await self._session.execute(stmt)
         return result.scalar_one_or_none()
+
+    async def list_latest_quotes(self) -> list[models.StockQuote]:
+        """Return the latest quote for every symbol in ONE query.
+
+        Replaces the N+1 loop that used to call `get_latest_quote` per symbol
+        for the `companiesinprofit`, `companiesinloss` and `sectorgraph`
+        endpoints (BUG-1).
+        """
+        latest_ts = (
+            select(
+                models.StockQuote.symbol.label("s"),
+                func.max(models.StockQuote.fetched_at).label("mx"),
+            )
+            .group_by(models.StockQuote.symbol)
+            .subquery()
+        )
+        stmt = select(models.StockQuote).join(
+            latest_ts,
+            and_(
+                models.StockQuote.symbol == latest_ts.c.s,
+                models.StockQuote.fetched_at == latest_ts.c.mx,
+            ),
+        )
+        result = await self._session.execute(stmt)
+        return list(result.scalars().all())
 
     async def get_quote_history(
         self,
@@ -110,17 +144,26 @@ class DataRepository:
         return snapshot.source_timestamp if snapshot else None
 
     # ---- Write ----
-    async def upsert_symbol(self, symbol: str, name: str | None = None) -> models.Symbol:
+    async def upsert_symbol(
+        self, symbol: str, name: str | None = None, sector: str | None = None
+    ) -> models.Symbol:
         normalized = symbol.upper()
         row = await self.get_symbol(normalized)
         if row is None:
-            row = models.Symbol(symbol=normalized, name=name, updated_at=datetime.utcnow())
+            row = models.Symbol(
+                symbol=normalized,
+                name=name,
+                sector=sector,
+                updated_at=_utcnow(),
+            )
             self._session.add(row)
         else:
             if name:
                 row.name = name
+            if sector:
+                row.sector = sector
             row.is_active = True
-            row.updated_at = datetime.utcnow()
+            row.updated_at = _utcnow()
         await self._session.commit()
         await self._session.refresh(row)
         return row
@@ -138,7 +181,11 @@ class DataRepository:
             ltp=snapshot.ltp,
             change=snapshot.change,
             change_pct=snapshot.change_pct,
-            volume=snapshot.volume,
+            volume=(
+                int(snapshot.volume)
+                if isinstance(snapshot.volume, (int, float))
+                else None
+            ),
             open=snapshot.open,
             high=snapshot.high,
             low=snapshot.low,
@@ -146,17 +193,21 @@ class DataRepository:
             source_timestamp=snapshot.source_timestamp,
             source=snapshot.source,
             raw_payload=snapshot.raw,
+            fetched_at=_utcnow(),
         )
         self._session.add(row)
         await self._session.commit()
         await self._session.refresh(row)
         return row
 
-    async def upsert_market_snapshot(self, payload: dict, source_timestamp: datetime | None, source: str) -> models.MarketSnapshot:
+    async def upsert_market_snapshot(
+        self, payload: dict, source_timestamp: datetime | None, source: str
+    ) -> models.MarketSnapshot:
         row = models.MarketSnapshot(
             payload=payload,
             source_timestamp=source_timestamp,
             source=source,
+            fetched_at=_utcnow(),
         )
         self._session.add(row)
         await self._session.commit()
@@ -172,59 +223,88 @@ class DataRepository:
         return count
 
     async def upsert_history_points(self, points: Iterable[TimeseriesPoint]) -> int:
+        """Insert-or-ignore history points.
+
+        Uses SQLite ON CONFLICT to avoid the previous N+1 SELECT-then-INSERT
+        pattern. Falls back to per-row insertion for other backends.
+        """
         added = 0
-        for point in points:
-            existing = await self._session.execute(
-                select(models.HistoryPoint.id).where(
-                    models.HistoryPoint.symbol == point.symbol.upper(),
-                    models.HistoryPoint.interval == point.interval,
-                    models.HistoryPoint.period_start == point.period_start,
-                )
+        rows = [
+            {
+                "symbol": p.symbol.upper(),
+                "interval": p.interval,
+                "period_start": p.period_start,
+                "open": p.open,
+                "high": p.high,
+                "low": p.low,
+                "close": p.close,
+                "volume": (
+                    int(p.volume) if isinstance(p.volume, (int, float)) else None
+                ),
+                "source_timestamp": p.source_timestamp,
+                "source": p.source,
+                "raw_payload": p.raw,
+                "fetched_at": _utcnow(),
+            }
+            for p in points
+        ]
+        if not rows:
+            return 0
+        dialect = self._session.bind.dialect.name if self._session.bind else ""
+        if dialect == "sqlite":
+            stmt = sqlite_insert(models.HistoryPoint).values(rows)
+            stmt = stmt.on_conflict_do_nothing(
+                index_elements=["symbol", "interval", "period_start"]
             )
-            if existing.scalar_one_or_none() is not None:
-                continue
-            row = models.HistoryPoint(
-                symbol=point.symbol.upper(),
-                interval=point.interval,
-                period_start=point.period_start,
-                open=point.open,
-                high=point.high,
-                low=point.low,
-                close=point.close,
-                volume=point.volume,
-                source_timestamp=point.source_timestamp,
-                source=point.source,
-                raw_payload=point.raw,
-            )
-            self._session.add(row)
-            added += 1
+            result = await self._session.execute(stmt)
+            added = result.rowcount or 0
+        else:
+            # Portable fallback — one row at a time.
+            for row in rows:
+                try:
+                    self._session.add(models.HistoryPoint(**row))
+                    await self._session.commit()
+                    added += 1
+                except Exception:
+                    await self._session.rollback()
         await self._session.commit()
         return added
 
     async def upsert_eod_records(self, points: Iterable[EodSnapshot]) -> int:
         added = 0
-        for point in points:
-            existing = await self._session.execute(
-                select(models.EodRecord.id).where(
-                    models.EodRecord.symbol == point.symbol.upper(),
-                    models.EodRecord.date == point.date,
-                )
-            )
-            if existing.scalar_one_or_none() is not None:
-                continue
-            row = models.EodRecord(
-                symbol=point.symbol.upper(),
-                date=point.date,
-                open=point.open,
-                high=point.high,
-                low=point.low,
-                close=point.close,
-                volume=point.volume,
-                source_timestamp=point.source_timestamp,
-                source=point.source,
-                raw_payload=point.raw,
-            )
-            self._session.add(row)
-            added += 1
+        rows = [
+            {
+                "symbol": p.symbol.upper(),
+                "date": p.date,
+                "open": p.open,
+                "high": p.high,
+                "low": p.low,
+                "close": p.close,
+                "volume": (
+                    int(p.volume) if isinstance(p.volume, (int, float)) else None
+                ),
+                "source_timestamp": p.source_timestamp,
+                "source": p.source,
+                "raw_payload": p.raw,
+                "fetched_at": _utcnow(),
+            }
+            for p in points
+        ]
+        if not rows:
+            return 0
+        dialect = self._session.bind.dialect.name if self._session.bind else ""
+        if dialect == "sqlite":
+            stmt = sqlite_insert(models.EodRecord).values(rows)
+            stmt = stmt.on_conflict_do_nothing(index_elements=["symbol", "date"])
+            result = await self._session.execute(stmt)
+            added = result.rowcount or 0
+        else:
+            for row in rows:
+                try:
+                    self._session.add(models.EodRecord(**row))
+                    await self._session.commit()
+                    added += 1
+                except Exception:
+                    await self._session.rollback()
         await self._session.commit()
         return added

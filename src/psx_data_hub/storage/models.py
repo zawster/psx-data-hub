@@ -28,6 +28,9 @@ class Symbol(Base):
 
 class StockQuote(Base):
     __tablename__ = "stock_quotes"
+    __table_args__ = (
+        UniqueConstraint("symbol", "source_timestamp", name="uq_stock_quote_symbol_ts"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True, nullable=False)

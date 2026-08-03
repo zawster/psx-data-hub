@@ -25,9 +25,9 @@ async def _seed() -> None:
 
         repo = DataRepository(session)
 
-        await repo.upsert_symbol("PSO", "Power Cement Limited")
-        await repo.upsert_symbol("OGDC", "Oil & Gas Development")
-        await repo.upsert_symbol("HBL", "Habib Bank Limited")
+        await repo.upsert_symbol("PSO", "Pakistan State Oil Company Limited", "Energy")
+        await repo.upsert_symbol("OGDC", "Oil & Gas Development Company Limited", "Energy")
+        await repo.upsert_symbol("HBL", "Habib Bank Limited", "Financials")
 
         await repo.upsert_market_snapshot(
             payload={
@@ -48,7 +48,7 @@ async def _seed() -> None:
             QuoteSnapshot(
                 symbol="PSO",
                 source="seed",
-                name="Power Cement Limited",
+                name="Pakistan State Oil Company Limited",
                 ltp=325.25,
                 change=5.75,
                 change_pct=1.81,
@@ -65,7 +65,7 @@ async def _seed() -> None:
             QuoteSnapshot(
                 symbol="OGDC",
                 source="seed",
-                name="Oil & Gas Development",
+                name="Oil & Gas Development Company Limited",
                 ltp=88.3,
                 change=-1.8,
                 change_pct=-2.0,

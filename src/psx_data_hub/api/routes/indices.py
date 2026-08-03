@@ -17,4 +17,4 @@ async def get_indices(repo: DataRepository = Depends(get_repo)):
     payload = snapshot.payload or {}
     if isinstance(payload, dict) and isinstance(payload.get("indices"), list):
         return {"indices": payload["indices"]}
-    return {"indices": [], "payload": payload}
+    return {"indices": []}

@@ -2,8 +2,11 @@ from __future__ import annotations
 
 from typing import Any, List
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+DEFAULT_JWT_SECRET = "CHANGE_ME_IN_PRODUCTION"  # noqa: S105 — placeholder, rejected outside local
 
 
 def _split_csv(value: str) -> List[str]:
@@ -20,9 +23,7 @@ class Settings(BaseSettings):
 
     # API behavior
     delay_minutes: int = 5
-    market_watchlist: List[str] | str = Field(
-        default_factory=lambda: ["PSO", "OGDC", "HBL", "ENGRO", "LUCKY"]
-    )
+    market_watchlist: List[str] | str = Field(default_factory=list)
     stale_threshold_seconds: int = 300
     quote_ttl_seconds: int = 45
     market_ttl_seconds: int = 45
@@ -33,24 +34,39 @@ class Settings(BaseSettings):
     api_keys: List[str] | str = Field(default_factory=list)
     auth_mode: str = "off"
     legacy_users: List[str] | str = Field(default_factory=lambda: ["demo:demo:public"])
-    jwt_secret_key: str = "CHANGE_ME_IN_PRODUCTION"
+    jwt_secret_key: str = DEFAULT_JWT_SECRET
     jwt_algorithm: str = "HS256"
     jwt_access_token_expire_minutes: int = 60
     rate_limit_per_minute: int = 60
     rate_limit_burst: int = 10
 
+    # Rate-limit trust boundary. If the app is behind a proxy set this to the
+    # proxy's IP(s); the limiter will then honor `X-Forwarded-For`.
+    trusted_proxies: List[str] | str = Field(default_factory=list)
+    rate_limit_max_buckets: int = 10_000
+
     # Polling
     poll_interval_seconds: int = 30
     poll_symbols_per_tick: int = 10
 
-    # Provider templates
+    # Provider templates. Verified against dps.psx.com.pk on 2026-08-03:
+    #   /market-watch                    — HTML table, every listed quote
+    #   /timeseries/int/{sym}            — intraday JSON
+    #   /timeseries/eod/{sym}            — end-of-day JSON
+    # The /company/{sym} page is a static profile with no live prices and is
+    # no longer scraped for quotes.
     provider_base_url: str = "https://dps.psx.com.pk"
     provider_quote_url_template: str = "{provider_base_url}/company/{symbol}"
-    provider_market_summary_url: str = "{provider_base_url}/market-summary"
-    provider_timeseries_url_template: str = "{provider_base_url}/company/{symbol}/timeseries/{interval}"
+    provider_market_summary_url: str = "{provider_base_url}/market-watch"
+    provider_timeseries_url_template: str = "{provider_base_url}/timeseries/{interval}/{symbol}"
 
     data_source_notice: str = "Data is delayed by at least 5 minutes."
     allowed_origins: List[str] | str = Field(default_factory=list)
+
+    # Docs gating. Set to `False` in production to hide /docs and /redoc.
+    docs_enabled: bool = True
+    # Hide the `Server: uvicorn` header on responses.
+    hide_server_header: bool = True
 
     @field_validator("market_watchlist", mode="before")
     @classmethod
@@ -72,7 +88,21 @@ class Settings(BaseSettings):
     @classmethod
     def _parse_legacy_users(cls, value):
         if isinstance(value, str):
-            return [item.strip() for item in value.split(",") if item.strip()]
+            return _split_csv(value)
+        return value or []
+
+    @field_validator("trusted_proxies", mode="before")
+    @classmethod
+    def _parse_trusted_proxies(cls, value):
+        if isinstance(value, str):
+            return _split_csv(value)
+        return value or []
+
+    @field_validator("allowed_origins", mode="before")
+    @classmethod
+    def _parse_allowed_origins(cls, value):
+        if isinstance(value, str):
+            return _split_csv(value)
         return value or []
 
     @field_validator("auth_mode")
@@ -97,6 +127,27 @@ class Settings(BaseSettings):
         expanded = expanded.replace("{PROVIDER_BASE_URL}", base_url)
         expanded = expanded.replace("{{provider_base_url}}", base_url)
         return expanded
+
+    @model_validator(mode="after")
+    def _validate_env_hardening(self):
+        env = (self.env or "local").strip().lower()
+        if env != "local":
+            if self.jwt_secret_key == DEFAULT_JWT_SECRET:
+                raise ValueError(
+                    "JWT_SECRET_KEY must be set to a non-default value "
+                    f"when ENV={env!r}."
+                )
+            if self.debug:
+                raise ValueError(f"DEBUG must be False when ENV={env!r}.")
+            # Reject wildcard CORS in non-local envs.
+            if isinstance(self.allowed_origins, list) and (
+                not self.allowed_origins or "*" in self.allowed_origins
+            ):
+                raise ValueError(
+                    "ALLOWED_ORIGINS must be an explicit list "
+                    f"(no wildcard) when ENV={env!r}."
+                )
+        return self
 
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 

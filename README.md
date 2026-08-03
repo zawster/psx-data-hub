@@ -42,9 +42,12 @@ docker compose up --build
 - `GET /v1/stocks`
 - `GET /v1/stocks/symbols`
 - `GET /v1/stocks/{symbol}`
-- `GET /v1/stocks/{symbol}/history?interval=5m&from=...&to=...`
-- `GET /v1/stocks/{symbol}/eod?from=...&to=...`
+- `GET /v1/stocks/{symbol}/description`
+- `GET /v1/stocks/{symbol}/history?interval={int|eod}&from=...&to=...&limit=...`
+- `GET /v1/stocks/{symbol}/eod?from=...&to=...&limit=...`
 - `GET /v1/indices`
+
+> `interval` accepts `int` (intraday, ~1-minute cadence from PSX) or `eod` (end-of-day). Older values like `5m`/`15m`/`1h`/`1d` are no longer valid — PSX's public feed does not expose them.
 
 ### Compatibility endpoints
 
@@ -131,6 +134,10 @@ docker compose --profile smoke up --build --abort-on-container-exit --exit-code-
 - No PSX license is shipped with this project.
 - Endpoint parsing and formats may need adjustments if upstream pages change.
 - This is designed for delayed/public-safe consumption patterns.
+- **v0.2.0 (2026-08-03)** — provider rewritten against the actual `dps.psx.com.pk` endpoints:
+  - Market snapshot now comes from `/market-watch` (494-row HTML table) instead of the non-existent `/market-summary`.
+  - Time series is fetched from `/timeseries/{int|eod}/{symbol}` — the `/company/{sym}` page is a static profile and no longer scraped for prices.
+  - One market-watch fetch populates quotes for every listed symbol; `MARKET_WATCHLIST` is now only used to opt-in additional per-symbol time-series polling.
 
 ## License
 
