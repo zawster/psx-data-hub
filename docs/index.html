@@ -1,0 +1,395 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="Complete API, deployment, and operations documentation for psx-data-hub v0.2.0.">
+  <title>psx-data-hub | API Documentation</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Archivo:wght@400;500;600;700;800&amp;family=IBM+Plex+Mono:wght@400;500;600;700&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="mobile-bar">
+    <strong>PSX / DATA HUB</strong>
+    <button type="button" data-menu aria-expanded="false" aria-controls="docs-nav">MENU</button>
+  </div>
+
+  <div class="shell">
+    <aside class="sidebar" id="docs-nav">
+      <a class="brand" href="#top">
+        <span class="brand-mark">PSX</span>
+        <span><strong>data-hub</strong><small>API FIELD MANUAL</small></span>
+      </a>
+      <span class="version">Documentation v0.2.0</span>
+      <label for="endpoint-search" class="nav-label">Endpoint search</label>
+      <input id="endpoint-search" class="sidebar-search" data-search type="search" placeholder="symbol, history, auth...">
+      <span class="search-count" data-search-count></span>
+
+      <nav aria-label="Documentation navigation">
+        <p class="nav-label">Start</p>
+        <a href="#overview">Overview</a>
+        <a href="#quickstart">Quick start</a>
+        <a href="#authentication">Authentication</a>
+        <a href="#conventions">Conventions</a>
+        <p class="nav-label">API reference</p>
+        <a href="#core-api">Core v1 API</a>
+        <a href="#compat-api">Compatibility API</a>
+        <a href="#errors">Errors and limits</a>
+        <p class="nav-label">Operate</p>
+        <a href="#configuration">Configuration</a>
+        <a href="#architecture">Architecture</a>
+        <a href="#deployment">Deployment</a>
+        <a href="#github-pages">GitHub Pages</a>
+      </nav>
+
+      <div class="sidebar-foot">
+        Delayed public-market data.<br>
+        Apache License 2.0.<br>
+        <a href="https://github.com/zawster/psx-data-hub">View source on GitHub</a>
+      </div>
+    </aside>
+
+    <main id="top">
+      <div class="content">
+        <header class="hero">
+          <p class="eyebrow">Pakistan Stock Exchange / delayed feed</p>
+          <h1>Market data, documented.</h1>
+          <p class="hero-copy">A complete field guide to the cached PSX quote, market, index, history, EOD, authentication, compatibility, and operational APIs.</p>
+          <div class="hero-actions">
+            <a class="button" href="#quickstart">Run your first request</a>
+            <a class="button secondary" href="#core-api">Browse endpoints</a>
+          </div>
+        </header>
+
+        <div class="notice" role="note">
+          <strong>Data policy</strong>
+          <span>Responses are cache-backed and designed for delayed/public-safe use. Always surface the returned delay metadata and source notice to downstream consumers.</span>
+        </div>
+
+        <section class="section" id="overview">
+          <div class="section-heading"><h2>Overview</h2><span>What this service exposes</span></div>
+          <p class="lede">The API reads normalized data from a local database. A separate worker fetches public PSX Data Portal pages, parses them, and persists snapshots. User requests never scrape PSX directly.</p>
+          <div class="grid-3">
+            <div class="stat-card"><b>26</b><span>documented HTTP endpoints: 25 GET and 1 POST</span></div>
+            <div class="stat-card"><b>2</b><span>supported history intervals: int and eod</span></div>
+            <div class="stat-card"><b>4</b><span>authentication modes</span></div>
+          </div>
+          <div class="grid-2" style="margin-top:1rem">
+            <article class="info-card"><h3>Core v1</h3><p>Stable, typed endpoints under <code>/v1</code> for health, market snapshots, symbols, quotes, history, EOD, and indices.</p></article>
+            <article class="info-card"><h3>Compatibility layer</h3><p>Root-level endpoints retained for clients using the original psx-data-hub contract, including token issuance and aggregate metrics.</p></article>
+          </div>
+        </section>
+
+        <section class="section" id="quickstart">
+          <div class="section-heading"><h2>Quick start</h2><span>Local API plus worker</span></div>
+          <div class="step"><span class="step-number">01</span><div><h3>Install</h3><pre>git clone https://github.com/zawster/psx-data-hub.git
+cd psx-data-hub
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy .env.example .env</pre></div></div>
+          <div class="step"><span class="step-number">02</span><div><h3>Start the API</h3><pre>$env:PYTHONPATH="src"
+uvicorn psx_data_hub.main:app --reload --no-server-header</pre><p>The interactive OpenAPI UI is available at <code>http://127.0.0.1:8000/docs</code> when <code>DOCS_ENABLED=true</code>.</p></div></div>
+          <div class="step"><span class="step-number">03</span><div><h3>Populate data</h3><pre>$env:PYTHONPATH="src"
+python -m psx_data_hub.worker</pre><p>The API can start before the worker, but market endpoints return empty or <code>no_data</code> payloads until the first successful cycle.</p></div></div>
+          <div class="step"><span class="step-number">04</span><div><h3>Call the API</h3><pre>curl http://127.0.0.1:8000/v1/health
+curl http://127.0.0.1:8000/v1/market
+curl http://127.0.0.1:8000/v1/stocks/PSO</pre></div></div>
+        </section>
+
+        <section class="section" id="authentication">
+          <div class="section-heading"><h2>Authentication</h2><span>AUTH_MODE controls protected routes</span></div>
+          <p class="lede"><code>/v1/health</code>, <code>/v1/status</code>, <code>/</code>, and <code>/token</code> are public. Market-data routes use the configured policy. <code>/token-check</code> always requires a valid bearer token.</p>
+          <div class="table-wrap"><table>
+            <thead><tr><th>AUTH_MODE</th><th>Accepted credential</th><th>Unauthenticated request</th></tr></thead>
+            <tbody>
+              <tr><td><code>off</code></td><td>None. If <code>API_KEY_REQUIRED=true</code>, a configured key is required.</td><td>Allowed unless legacy API-key enforcement is enabled.</td></tr>
+              <tr><td><code>api_key</code></td><td><code>X-API-Key: value</code></td><td>401</td></tr>
+              <tr><td><code>jwt</code></td><td><code>Authorization: Bearer token</code></td><td>401</td></tr>
+              <tr><td><code>hybrid</code></td><td>Either a configured API key or valid bearer token.</td><td>401</td></tr>
+            </tbody>
+          </table></div>
+          <h3>API key request</h3><pre>curl http://127.0.0.1:8000/v1/market \
+  -H "X-API-Key: your-api-key"</pre>
+          <h3>JWT token flow</h3><pre>curl -X POST http://127.0.0.1:8000/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=demo&password=demo"
+
+curl http://127.0.0.1:8000/v1/market \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"</pre>
+          <p>Configure users as comma-separated <code>username:password:scope1|scope2</code> entries in <code>LEGACY_USERS</code>. Plain passwords are hashed at application startup; pre-hashed bcrypt values are accepted.</p>
+        </section>
+
+        <section class="section" id="conventions">
+          <div class="section-heading"><h2>Conventions</h2><span>Shared request and response rules</span></div>
+          <div class="grid-2">
+            <article class="info-card"><h3>Base URLs</h3><p>Local: <code>http://127.0.0.1:8000</code></p><p>Core prefix: <code>/v1</code></p><p>Compatibility routes use the root path.</p></article>
+            <article class="info-card"><h3>Symbols and dates</h3><p>Symbols are normalized to uppercase and must match <code>[A-Z0-9._-]{1,20}</code>. Datetimes use ISO 8601. EOD dates use <code>YYYY-MM-DD</code>.</p></article>
+          </div>
+          <h3>Delay metadata</h3>
+          <p>Quote, market, and compatibility responses include delay metadata directly or under <code>delay</code>.</p>
+          <pre>{
+  "delay_minutes": 5,
+  "source": "dps.psx.com.pk",
+  "source_timestamp": "2026-08-04T10:30:00Z",
+  "fetched_at": "2026-08-04T10:35:03Z",
+  "cache_age_seconds": 12,
+  "data_source_notice": "Data is delayed by at least 5 minutes.",
+  "is_stale": false
+}</pre>
+          <h3>HEAD requests</h3>
+          <p>Every GET endpoint also accepts HEAD. The response body is empty and headers, including the GET-equivalent <code>Content-Length</code>, are preserved. Use <code>curl --head URL</code>, not <code>curl -X HEAD URL</code>.</p>
+        </section>
+
+        <section class="section" id="core-api">
+          <div class="section-heading"><h2>Core v1 API</h2><span>10 endpoints</span></div>
+          <div class="endpoint-list">
+            <article class="endpoint" id="get-v1-health"><header class="endpoint-head"><span class="method get">GET</span><h3>/v1/health</h3><span class="tag public">Public</span></header><div class="endpoint-body"><p>Liveness and shallow readiness probe. Executes <code>SELECT 1</code> and reports the age of the latest market snapshot.</p><pre>curl http://127.0.0.1:8000/v1/health</pre><h4>200 response</h4><pre>{
+  "status": "ok",
+  "timestamp": "2026-08-04T10:35:15Z",
+  "database": "ok",
+  "provider": "dps.psx.com.pk",
+  "data_delay_minutes": 5,
+  "data_source_notice": "Data is delayed by at least 5 minutes.",
+  "last_market_fetch_age_seconds": 12
+}</pre><details><summary>Operational meaning</summary><p><code>status</code> becomes <code>degraded</code> and <code>database</code> becomes <code>unreachable</code> when the database probe fails. A high or null fetch age indicates that the worker is stalled or has not completed its first cycle.</p></details></div></article>
+
+            <article class="endpoint" id="get-v1-status"><header class="endpoint-head"><span class="method get">GET</span><h3>/v1/status</h3><span class="tag public">Public</span></header><div class="endpoint-body"><p>Lightweight process status that does not query the database.</p><pre>curl http://127.0.0.1:8000/v1/status</pre><h4>200 response</h4><pre>{
+  "status": "ok",
+  "provider": "dps.psx.com.pk",
+  "data_delay_minutes": 5,
+  "data_source_notice": "Data is delayed by at least 5 minutes."
+}</pre></div></article>
+
+            <article class="endpoint" id="get-v1-market"><header class="endpoint-head"><span class="method get">GET</span><h3>/v1/market</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Returns the newest persisted market snapshot, parsed indices, and delay metadata. The raw <code>payload</code> also contains tickers and authoritative Regular-market totals.</p><pre>curl http://127.0.0.1:8000/v1/market</pre><h4>200 response</h4><pre>{
+  "fetched_at": "2026-08-04T10:35:03Z",
+  "source_timestamp": "2026-08-04T10:35:02Z",
+  "delay": { "delay_minutes": 5, "source": "dps.psx.com.pk", "is_stale": false },
+  "payload": {
+    "market_status": "closed",
+    "trades": 351200,
+    "total_volume": 711271299,
+    "market_value": 28452234491.2,
+    "tickers": []
+  },
+  "indices": [{ "symbol": "KSE100", "value": 178129.37, "change": -70.65, "change_pct": -0.04 }]
+}</pre><details><summary>No-data state</summary><p>Before the worker stores a snapshot, the endpoint still returns 200 with <code>payload.status="no_data"</code>, an empty indices list, and stale delay metadata.</p></details></div></article>
+
+            <article class="endpoint" id="get-v1-stocks"><header class="endpoint-head"><span class="method get">GET</span><h3>/v1/stocks</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Lists symbols known to the database, ordered alphabetically.</p><div class="table-wrap"><table><thead><tr><th>Query</th><th>Type</th><th>Default</th><th>Description</th></tr></thead><tbody><tr><td><code>include_inactive</code></td><td>boolean</td><td>false</td><td>Include symbols marked inactive.</td></tr></tbody></table></div><pre>curl "http://127.0.0.1:8000/v1/stocks?include_inactive=false"</pre><h4>200 response</h4><pre>[
+  { "symbol": "HBL", "name": "Habib Bank Limited" },
+  { "symbol": "PSO", "name": "Pakistan State Oil Company Limited" }
+]</pre></div></article>
+
+            <article class="endpoint" id="get-v1-stock-symbols"><header class="endpoint-head"><span class="method get">GET</span><h3>/v1/stocks/symbols</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Alias of <code>/v1/stocks</code>. It accepts the same <code>include_inactive</code> query parameter and returns the same symbol array. The alias is intentionally omitted from generated OpenAPI schema to avoid duplicate documentation.</p><pre>curl http://127.0.0.1:8000/v1/stocks/symbols</pre></div></article>
+
+            <article class="endpoint" id="get-v1-stock"><header class="endpoint-head"><span class="method get">GET</span><h3>/v1/stocks/{symbol}</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Returns the newest cached quote for one normalized symbol.</p><div class="meta-row"><span><b>Path:</b> <code>symbol</code>, 1-20 letters, digits, dot, underscore, or hyphen</span></div><pre>curl http://127.0.0.1:8000/v1/stocks/PSO</pre><h4>200 response</h4><pre>{
+  "symbol": "PSO",
+  "name": "Pakistan State Oil Company Limited",
+  "ltp": 353.61,
+  "change": 6.12,
+  "change_pct": 1.76,
+  "volume": 2944798,
+  "open": 350.5,
+  "high": 356.37,
+  "low": 349.0,
+  "close": 347.49,
+  "delay": { "delay_minutes": 5, "source": "dps.psx.com.pk", "is_stale": false }
+}</pre><details><summary>Errors</summary><p>400 for an invalid symbol. 404 when no cached quote exists. 401 when the configured authentication policy is not satisfied.</p></details></div></article>
+
+            <article class="endpoint" id="get-v1-description"><header class="endpoint-head"><span class="method get">GET</span><h3>/v1/stocks/{symbol}/description</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Returns identity and source metadata. Because market-watch does not expose long descriptions, <code>description</code> is currently null and <code>name</code> falls back to the symbol.</p><pre>curl http://127.0.0.1:8000/v1/stocks/PSO/description</pre><h4>200 response</h4><pre>{
+  "symbol": "PSO",
+  "name": "PSO",
+  "sector": "OIL & GAS MARKETING COMPANIES",
+  "description": null,
+  "source": "dps.psx.com.pk",
+  "source_timestamp": "2026-08-04T10:35:02Z"
+}</pre><details><summary>Errors</summary><p>400 for an invalid symbol. 404 only when neither a symbol record nor a quote exists.</p></details></div></article>
+
+            <article class="endpoint" id="get-v1-history"><header class="endpoint-head"><span class="method get">GET</span><h3>/v1/stocks/{symbol}/history</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Returns cached intraday or EOD time-series points in ascending period order.</p><div class="table-wrap"><table><thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Rules</th></tr></thead><tbody><tr><td><code>interval</code></td><td>string</td><td><code>int</code></td><td>Only <code>int</code> or <code>eod</code>.</td></tr><tr><td><code>from</code></td><td>ISO datetime</td><td>none</td><td>Inclusive lower bound.</td></tr><tr><td><code>to</code></td><td>ISO datetime</td><td>none</td><td>Inclusive upper bound; must be after <code>from</code>.</td></tr><tr><td><code>limit</code></td><td>integer</td><td>500</td><td>1 to 5000.</td></tr></tbody></table></div><pre>curl "http://127.0.0.1:8000/v1/stocks/PSO/history?interval=int&limit=100"</pre><h4>200 response</h4><pre>[
+  {
+    "symbol": "PSO",
+    "interval": "int",
+    "period_start": "2026-08-04T10:30:00Z",
+    "open": null,
+    "high": null,
+    "low": null,
+    "close": 353.61,
+    "volume": 2944798
+  }
+]</pre><details><summary>Errors and empty data</summary><p>400 for invalid symbols or reversed date ranges. 422 for unsupported intervals or invalid limits. A valid symbol/range with no stored points returns an empty array.</p></details></div></article>
+
+            <article class="endpoint" id="get-v1-eod"><header class="endpoint-head"><span class="method get">GET</span><h3>/v1/stocks/{symbol}/eod</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Returns dedicated daily OHLCV records, newest date first.</p><div class="table-wrap"><table><thead><tr><th>Parameter</th><th>Type</th><th>Default</th><th>Rules</th></tr></thead><tbody><tr><td><code>from</code></td><td>date</td><td>none</td><td>Inclusive <code>YYYY-MM-DD</code>.</td></tr><tr><td><code>to</code></td><td>date</td><td>none</td><td>Inclusive and not before <code>from</code>.</td></tr><tr><td><code>limit</code></td><td>integer</td><td>500</td><td>1 to 5000.</td></tr></tbody></table></div><pre>curl "http://127.0.0.1:8000/v1/stocks/PSO/eod?from=2026-01-01&limit=250"</pre><h4>200 response</h4><pre>[
+  { "symbol": "PSO", "date": "2026-08-04", "open": null, "high": null, "low": null, "close": 353.61, "volume": 2944798 }
+]</pre><details><summary>Errors and empty data</summary><p>400 for invalid symbols or reversed ranges. 422 for malformed dates or limits. No matching records returns an empty array.</p></details></div></article>
+
+            <article class="endpoint" id="get-v1-indices"><header class="endpoint-head"><span class="method get">GET</span><h3>/v1/indices</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Returns index rows from the latest market snapshot.</p><pre>curl http://127.0.0.1:8000/v1/indices</pre><h4>200 response</h4><pre>{
+  "indices": [
+    { "symbol": "KSE100", "name": "KSE100", "value": 178129.37, "high": 178768.83, "low": 178023.65, "change": -70.65, "changePct": -0.04, "change_pct": -0.04 }
+  ]
+}</pre><p>When no market snapshot or index payload is available, this endpoint returns <code>{"indices": []}</code>.</p></div></article>
+          </div>
+        </section>
+
+        <section class="section" id="compat-api">
+          <div class="section-heading"><h2>Compatibility API</h2><span>16 root-level endpoints</span></div>
+          <p class="lede">These routes preserve the original client-facing shape. Except for welcome, token issuance, and token-check semantics, market-data routes use the same configured authentication policy as core v1.</p>
+          <div class="endpoint-list">
+            <article class="endpoint" id="get-root"><header class="endpoint-head"><span class="method get">GET</span><h3>/</h3><span class="tag public">Public</span></header><div class="endpoint-body"><p>Service welcome and interactive documentation pointer.</p><pre>curl http://127.0.0.1:8000/</pre><h4>200 response</h4><pre>{ "message": "Welcome to the PSX data-hub API", "docs": "/docs" }</pre></div></article>
+
+            <article class="endpoint" id="post-token"><header class="endpoint-head"><span class="method post">POST</span><h3>/token</h3><span class="tag public">Public</span></header><div class="endpoint-body"><p>Authenticates a configured legacy user and issues a signed JWT.</p><div class="table-wrap"><table><thead><tr><th>Form field</th><th>Required</th><th>Description</th></tr></thead><tbody><tr><td><code>username</code></td><td>yes</td><td>User from <code>LEGACY_USERS</code>.</td></tr><tr><td><code>password</code></td><td>yes</td><td>Plain credential submitted over HTTPS.</td></tr></tbody></table></div><pre>curl -X POST http://127.0.0.1:8000/token \
+  -H "Content-Type: application/x-www-form-urlencoded" \
+  -d "username=demo&password=demo"</pre><h4>200 response</h4><pre>{ "access_token": "eyJ...", "token_type": "bearer" }</pre><details><summary>Errors</summary><p>401 with <code>Invalid username or password</code> for failed authentication. 422 when required form fields are missing.</p></details></div></article>
+
+            <article class="endpoint" id="get-token-check"><header class="endpoint-head"><span class="method get">GET</span><h3>/token-check</h3><span class="tag jwt">JWT only</span></header><div class="endpoint-body"><p>Verifies that a bearer token is present, signed with the configured algorithm and secret, unexpired, and contains a subject.</p><pre>curl http://127.0.0.1:8000/token-check \
+  -H "Authorization: Bearer YOUR_ACCESS_TOKEN"</pre><h4>200 response</h4><pre>{ "message": "You are authenticated!" }</pre><p>Missing, expired, malformed, or incorrectly signed tokens return 401.</p></div></article>
+
+            <article class="endpoint" id="get-volume"><header class="endpoint-head"><span class="method get">GET</span><h3>/volume</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Returns authoritative Regular-market volume from the latest snapshot.</p><pre>curl http://127.0.0.1:8000/volume</pre><h4>200 response</h4><pre>{ "metric": "volume", "value": 711271299, "unit": "shares", "delay": { "source": "dps.psx.com.pk", "is_stale": false } }</pre><p>Returns value 0 when the snapshot contains no recognized volume field.</p></div></article>
+
+            <article class="endpoint" id="get-status"><header class="endpoint-head"><span class="method get">GET</span><h3>/status</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Returns the authoritative Regular-market session state, not service health.</p><pre>curl http://127.0.0.1:8000/status</pre><h4>200 response</h4><pre>{ "status": "closed", "delay": { "source": "dps.psx.com.pk", "is_stale": false } }</pre><p>Returns <code>unknown</code> when no status field is available.</p></div></article>
+
+            <article class="endpoint" id="get-trades"><header class="endpoint-head"><span class="method get">GET</span><h3>/tradesinstockmarket</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Returns the actual number of Regular-market trades from the latest snapshot.</p><pre>curl http://127.0.0.1:8000/tradesinstockmarket</pre><h4>200 response</h4><pre>{ "metric": "trades_in_stock_market", "value": 351200, "delay": { "source": "dps.psx.com.pk", "is_stale": false } }</pre></div></article>
+
+            <article class="endpoint" id="get-totalcompanies"><header class="endpoint-head"><span class="method get">GET</span><h3>/totalcompanies</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Counts active symbol records.</p><pre>curl http://127.0.0.1:8000/totalcompanies</pre><h4>200 response</h4><pre>{ "metric": "total_companies", "value": 443, "delay": { "source": "dps.psx.com.pk", "is_stale": false } }</pre></div></article>
+
+            <article class="endpoint" id="get-companies-loss"><header class="endpoint-head"><span class="method get">GET</span><h3>/companiesinloss</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Counts latest quotes whose absolute change is below zero. Uses one latest-quote-per-symbol query.</p><pre>curl http://127.0.0.1:8000/companiesinloss</pre><h4>200 response</h4><pre>{ "metric": "companies_in_loss", "value": 187, "delay": { "source": "dps.psx.com.pk", "is_stale": false } }</pre></div></article>
+
+            <article class="endpoint" id="get-companies-profit"><header class="endpoint-head"><span class="method get">GET</span><h3>/companiesinprofit</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Counts latest quotes whose absolute change is above zero. Unchanged or null-change quotes are excluded.</p><pre>curl http://127.0.0.1:8000/companiesinprofit</pre><h4>200 response</h4><pre>{ "metric": "companies_in_profit", "value": 201, "delay": { "source": "dps.psx.com.pk", "is_stale": false } }</pre></div></article>
+
+            <article class="endpoint" id="get-sectors"><header class="endpoint-head"><span class="method get">GET</span><h3>/sectors</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Groups active companies by the readable PSX sector name persisted during market refresh.</p><pre>curl http://127.0.0.1:8000/sectors</pre><h4>200 response</h4><pre>{
+  "metric": "sectors",
+  "count": 37,
+  "items": [{ "sector": "OIL & GAS MARKETING COMPANIES", "companies": 12 }],
+  "delay": { "source": "dps.psx.com.pk", "is_stale": false }
+}</pre><p>Symbols without sector metadata are grouped under <code>Unknown</code>.</p></div></article>
+
+            <article class="endpoint" id="get-sectorgraph"><header class="endpoint-head"><span class="method get">GET</span><h3>/sectorgraph</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Aggregates the average percentage change of each sector using the latest quote per symbol.</p><pre>curl http://127.0.0.1:8000/sectorgraph</pre><h4>200 response</h4><pre>{
+  "metric": "sectorgraph",
+  "items": [{ "sector": "COMMERCIAL BANKS", "companies": 18, "avg_change_pct": 0.4812 }],
+  "delay": { "source": "dps.psx.com.pk", "is_stale": false }
+}</pre><p>Companies without a quote or percentage change are excluded.</p></div></article>
+
+            <article class="endpoint" id="get-allindices"><header class="endpoint-head"><span class="method get">GET</span><h3>/allindices</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Returns raw index objects from the latest market snapshot plus delay metadata.</p><pre>curl http://127.0.0.1:8000/allindices</pre><h4>200 response</h4><pre>{
+  "indices": [{ "symbol": "KSE100", "value": 178129.37, "change": -70.65, "changePct": -0.04 }],
+  "delay": { "source": "dps.psx.com.pk", "is_stale": false }
+}</pre></div></article>
+
+            <article class="endpoint" id="get-getindex"><header class="endpoint-head"><span class="method get">GET</span><h3>/getindex?symbol={symbol}</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Finds one index in the latest snapshot by case-insensitive normalized symbol.</p><div class="meta-row"><span><b>Required query:</b> <code>symbol</code>, for example <code>KSE100</code></span></div><pre>curl "http://127.0.0.1:8000/getindex?symbol=KSE100"</pre><h4>200 response</h4><pre>{ "symbol": "KSE100", "value": 178129.37, "change": -70.65, "change_pct": -0.04, "delay": { "is_stale": false } }</pre><details><summary>Errors</summary><p>400 for a symbol that fails normalization rules. 404 when the index is absent. 422 when the query parameter is missing or too long.</p></details></div></article>
+
+            <article class="endpoint" id="get-company-all"><header class="endpoint-head"><span class="method get">GET</span><h3>/{company}/getalldata</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Compatibility quote shape for one company.</p><pre>curl http://127.0.0.1:8000/PSO/getalldata</pre><h4>200 response</h4><pre>{
+  "symbol": "PSO", "name": null, "ltp": 353.61, "change": 6.12,
+  "change_pct": 1.76, "open": 350.5, "high": 356.37, "low": 349.0,
+  "close": 347.49, "volume": 2944798, "source": "dps.psx.com.pk",
+  "fetched_at": "2026-08-04T10:35:03Z"
+}</pre><details><summary>Errors</summary><p>400 for invalid company symbols and 404 when no quote is cached.</p></details></div></article>
+
+            <article class="endpoint" id="get-company-description"><header class="endpoint-head"><span class="method get">GET</span><h3>/{company}/description</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Compatibility alias of the core description data. This route is GET-only.</p><pre>curl http://127.0.0.1:8000/PSO/description</pre><h4>200 response</h4><pre>{ "symbol": "PSO", "name": "PSO", "sector": "OIL & GAS MARKETING COMPANIES", "description": null, "source": "dps.psx.com.pk", "source_timestamp": "2026-08-04T10:35:02Z" }</pre></div></article>
+
+            <article class="endpoint" id="get-company-equity"><header class="endpoint-head"><span class="method get">GET</span><h3>/{company}/equitydata</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Compatibility OHLCV quote view. This route is GET-only.</p><pre>curl http://127.0.0.1:8000/PSO/equitydata</pre><h4>200 response</h4><pre>{ "symbol": "PSO", "name": null, "open": 350.5, "high": 356.37, "low": 349.0, "close": 347.49, "ltp": 353.61, "volume": 2944798, "source": "dps.psx.com.pk", "fetched_at": "2026-08-04T10:35:03Z" }</pre><details><summary>Errors</summary><p>400 for invalid company symbols and 404 when no quote is cached.</p></details></div></article>
+          </div>
+        </section>
+
+        <section class="section" id="errors">
+          <div class="section-heading"><h2>Errors and limits</h2><span>Consistent HTTP behavior</span></div>
+          <div class="error-grid">
+            <div class="error-card"><b>400</b><p>Invalid symbol or reversed date range.</p></div>
+            <div class="error-card"><b>401</b><p>Missing or invalid API key or bearer token.</p></div>
+            <div class="error-card"><b>403</b><p>A JWT-only operation received another principal type.</p></div>
+            <div class="error-card"><b>404</b><p>Requested quote, company, or index is not cached.</p></div>
+            <div class="error-card"><b>422</b><p>Missing form/query fields, invalid dates, interval, or limits.</p></div>
+            <div class="error-card"><b>429</b><p>Minute or burst rate limit exceeded.</p></div>
+          </div>
+          <h3>Error body</h3><pre>{ "detail": "no cached quote for symbol 'UNKNOWN'" }</pre>
+          <h3>Rate-limit body</h3><pre>{
+  "error": "rate_limit_exceeded",
+  "message": "Too many requests. Lower polling frequency and retry later."
+}</pre>
+          <p>Rate limiting identifies clients by bearer token, API key, or direct peer IP. <code>X-Forwarded-For</code> is used only when the immediate peer is listed in <code>TRUSTED_PROXIES</code>. Health and service-status paths are exempt.</p>
+        </section>
+
+        <section class="section" id="configuration">
+          <div class="section-heading"><h2>Configuration</h2><span>Environment variables</span></div>
+          <div class="table-wrap"><table>
+            <thead><tr><th>Variable</th><th>Default</th><th>Purpose</th></tr></thead>
+            <tbody>
+              <tr><td><code>ENV</code></td><td>local</td><td>Runtime environment. Non-local values enable strict production validation.</td></tr>
+              <tr><td><code>DATABASE_URL</code></td><td>SQLite in <code>./data</code></td><td>SQLAlchemy async database URL.</td></tr>
+              <tr><td><code>DELAY_MINUTES</code></td><td>5</td><td>Declared delay included in metadata.</td></tr>
+              <tr><td><code>MARKET_WATCHLIST</code></td><td>empty in code</td><td>Comma-separated symbols that receive intraday and EOD polling. All market-watch quotes are still persisted.</td></tr>
+              <tr><td><code>POLL_INTERVAL_SECONDS</code></td><td>30</td><td>Target delay between worker cycles.</td></tr>
+              <tr><td><code>POLL_SYMBOLS_PER_TICK</code></td><td>10</td><td>Watchlist chunk size.</td></tr>
+              <tr><td><code>STALE_THRESHOLD_SECONDS</code></td><td>300</td><td>Age after which metadata reports stale data.</td></tr>
+              <tr><td><code>REQUEST_TIMEOUT_SECONDS</code></td><td>12</td><td>PSX provider request timeout.</td></tr>
+              <tr><td><code>AUTH_MODE</code></td><td>off</td><td><code>off</code>, <code>api_key</code>, <code>jwt</code>, or <code>hybrid</code>.</td></tr>
+              <tr><td><code>API_KEY_REQUIRED</code></td><td>false</td><td>Legacy API-key enforcement when auth mode is off.</td></tr>
+              <tr><td><code>API_KEYS</code></td><td>empty</td><td>Comma-separated valid API keys.</td></tr>
+              <tr><td><code>LEGACY_USERS</code></td><td>demo user</td><td>Comma-separated <code>username:password:scopes</code> entries.</td></tr>
+              <tr><td><code>JWT_SECRET_KEY</code></td><td>unsafe placeholder</td><td>Must be replaced outside local mode.</td></tr>
+              <tr><td><code>JWT_ACCESS_TOKEN_EXPIRE_MINUTES</code></td><td>60</td><td>JWT lifetime.</td></tr>
+              <tr><td><code>RATE_LIMIT_PER_MINUTE</code></td><td>60</td><td>Sustained request capacity per client key.</td></tr>
+              <tr><td><code>RATE_LIMIT_BURST</code></td><td>10</td><td>Requests allowed within the 10-second burst window.</td></tr>
+              <tr><td><code>TRUSTED_PROXIES</code></td><td>empty</td><td>Comma-separated peers allowed to supply forwarded client IPs.</td></tr>
+              <tr><td><code>ALLOWED_ORIGINS</code></td><td>local wildcard</td><td>Explicit CORS origins required outside local mode.</td></tr>
+              <tr><td><code>DOCS_ENABLED</code></td><td>true</td><td>Expose FastAPI Swagger, ReDoc, and OpenAPI JSON.</td></tr>
+              <tr><td><code>HIDE_SERVER_HEADER</code></td><td>true</td><td>Disable Uvicorn's Server header through the bundled launcher.</td></tr>
+              <tr><td><code>PROVIDER_*</code></td><td>dps.psx.com.pk</td><td>Configurable market-watch, indices, status, sectors, and time-series routes.</td></tr>
+            </tbody>
+          </table></div>
+          <div class="notice"><strong>Production guard</strong><span>Non-local startup is rejected when the JWT secret is unchanged, debug mode is enabled, or CORS origins are empty or contain a wildcard.</span></div>
+        </section>
+
+        <section class="section" id="architecture">
+          <div class="section-heading"><h2>Architecture</h2><span>Cache-backed by design</span></div>
+          <div class="grid-2">
+            <article class="info-card"><h3>1. Provider</h3><p>Fetches four market pages concurrently, normalizes quotes, indices, market totals, and sectors, and parses JSON time series.</p></article>
+            <article class="info-card"><h3>2. Worker</h3><p>Runs the provider, persists all market-watch quotes, refreshes watchlist time series, and prunes old quote rows.</p></article>
+            <article class="info-card"><h3>3. Repository</h3><p>Stores symbols, quotes, market snapshots, history points, and EOD records through async SQLAlchemy.</p></article>
+            <article class="info-card"><h3>4. API</h3><p>Reads cached rows only, applies auth and rate limits, and decorates responses with delay and staleness metadata.</p></article>
+          </div>
+          <h3>SQLite initialization</h3>
+          <p><code>init_db()</code> creates missing tables, removes duplicate non-null quote timestamps, and creates the named unique index <code>uq_stock_quote_symbol_ts</code>. Large history and EOD writes use batches of 75 rows to stay below SQLite variable limits.</p>
+          <h3>Provider failure behavior</h3>
+          <p>Temporary fetch and parse errors are retried by the service. Sector labels are a soft dependency and retain the last successful mapping. Worker failures are logged per operation so one symbol does not terminate the entire polling loop.</p>
+        </section>
+
+        <section class="section" id="deployment">
+          <div class="section-heading"><h2>Deployment</h2><span>API and worker are separate processes</span></div>
+          <h3>Production checklist</h3>
+          <ul class="field-list">
+            <li>Back up an existing SQLite database before the first v0.2.0 startup.</li>
+            <li>Set <code>ENV=production</code>, a strong <code>JWT_SECRET_KEY</code>, explicit <code>ALLOWED_ORIGINS</code>, and <code>DEBUG=false</code>.</li>
+            <li>Select and test <code>AUTH_MODE</code>; do not assume core routes remain public.</li>
+            <li>Run one API process and at least one worker process against the same database.</li>
+            <li>Use <code>--no-server-header</code> when invoking Uvicorn directly.</li>
+            <li>Monitor <code>/v1/health</code> and alert on database degradation or excessive market-fetch age.</li>
+            <li>Surface the delay notice and stale flag in consuming applications.</li>
+          </ul>
+          <h3>Docker Compose</h3><pre>docker compose up --build
+
+# Optional smoke profile
+docker compose --profile smoke up --build \
+  --abort-on-container-exit --exit-code-from smoke-check</pre>
+          <h3>Compliance posture</h3>
+          <p>The project does not ship a PSX data license. Public data terms and redistribution rules can change. Treat the feed as delayed, avoid guaranteed or premium-data claims, publish cache age and source notices, and obtain independent legal review for commercial redistribution.</p>
+        </section>
+
+        <section class="section" id="github-pages">
+          <div class="section-heading"><h2>GitHub Pages</h2><span>No build step required</span></div>
+          <p class="lede">This documentation is plain HTML, CSS, and JavaScript with a <code>.nojekyll</code> marker. GitHub can serve it directly from the repository.</p>
+          <div class="step"><span class="step-number">01</span><div><h3>Merge the documentation</h3><p>Ensure this <code>docs/</code> folder is present on the default branch.</p></div></div>
+          <div class="step"><span class="step-number">02</span><div><h3>Select the source</h3><p>Open repository <strong>Settings &gt; Pages</strong>. Under Build and deployment, select <strong>Deploy from a branch</strong>.</p></div></div>
+          <div class="step"><span class="step-number">03</span><div><h3>Publish</h3><p>Select branch <code>main</code>, folder <code>/docs</code>, and save. GitHub will display the public URL after deployment.</p></div></div>
+          <div class="notice"><strong>Path safety</strong><span>Assets use relative URLs, so the site works under the repository subpath without a custom domain or base-path configuration.</span></div>
+        </section>
+
+        <footer class="footer">
+          <strong>psx-data-hub v0.2.0</strong><br>
+          Delayed Pakistan Stock Exchange data API. Documentation and source are licensed under Apache License 2.0.
+        </footer>
+      </div>
+    </main>
+  </div>
+  <script src="app.js" defer></script>
+</body>
+</html>
