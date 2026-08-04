@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import json
+import asyncio
 import re
-from datetime import datetime
-from typing import Any, Iterable
+from datetime import date, datetime, timezone
+from typing import Any
 
 from bs4 import BeautifulSoup
 import httpx
-from dateutil.parser import parse as parse_datetime
 
 from psx_data_hub.core.config import settings
 from psx_data_hub.providers.base import (
@@ -21,10 +20,66 @@ from psx_data_hub.providers.base import (
 )
 
 
-class PsxDpsProvider(StockMarketDataProvider):
-    """Public-source provider for PSX DPS pages.
+_MARKET_WATCH_HEADERS = {
+    "symbol": {"symbol", "scrip"},
+    "sector": {"sector"},
+    "listed_in": {"listed in", "indices", "index"},
+    "ldcp": {"ldcp", "last day close price", "previous close"},
+    "open": {"open", "opening"},
+    "high": {"high"},
+    "low": {"low"},
+    "current": {"current", "ltp", "last"},
+    "change": {"change", "chg"},
+    "change_pct": {"change (%)", "change%", "change percent", "%chg"},
+    "volume": {"volume", "vol", "tradevolume"},
+}
 
-    This provider is explicitly delay-first and built to survive light payload drift.
+_INDEX_HEADERS = {
+    "symbol": {"index", "symbol"},
+    "high": {"high"},
+    "low": {"low"},
+    "current": {"current", "value"},
+    "change": {"change", "chg"},
+    "change_pct": {"% change", "change (%)", "change%", "%chg"},
+}
+
+_SECTOR_HEADERS = {
+    "code": {"sector code", "code"},
+    "name": {"sector name", "name"},
+}
+
+
+def _num(value: Any) -> float | int | None:
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return value
+    raw = str(value).strip().replace(",", "")
+    if not raw or raw in {"-", "N/A", "NA", "None"}:
+        return None
+    if raw.endswith("%"):
+        raw = raw[:-1].strip()
+    try:
+        if "." in raw or "e" in raw.lower():
+            return float(raw)
+        return int(raw)
+    except ValueError:
+        try:
+            return float(raw)
+        except Exception:
+            return None
+
+
+class PsxDpsProvider(StockMarketDataProvider):
+    """Fetches PSX delayed data from `dps.psx.com.pk`.
+
+    Live URLs (verified 2026-08-03):
+      * `/market-watch` — one HTML table with a row per listed symbol. Source of every quote.
+      * `/timeseries/int/{sym}` — intraday JSON: `{status:1, data:[[unix_ts, price, volume], ...]}`.
+      * `/timeseries/eod/{sym}` — end-of-day JSON, same shape (with an extra column).
+
+    Individual `/company/{sym}` pages are static company profiles and contain
+    no price data — they are not scraped.
     """
 
     source = "dps.psx.com.pk"
@@ -33,234 +88,410 @@ class PsxDpsProvider(StockMarketDataProvider):
         self._owned_client = client is None
         self._client = client or httpx.AsyncClient(
             timeout=settings.request_timeout_seconds,
-            headers={"User-Agent": "psx-data-hub/0.1.0 (+https://github.com)"},
+            headers={
+                "User-Agent": "psx-data-hub/0.2.0 (+https://github.com/zawster/psx-data-hub)"
+            },
         )
+        self._latest_watch: dict[str, dict[str, Any]] = {}
+        self._sector_names: dict[str, str] = {}
 
     async def close(self) -> None:
         if self._owned_client:
             await self._client.aclose()
 
-    @staticmethod
-    def _num(value: Any) -> float | int | None:
-        if value is None:
-            return None
-        if isinstance(value, (int, float)):
-            return value
-        raw = str(value).replace(",", "").strip()
-        if not raw or raw in {"-", "N/A", "NA", "None"}:
-            return None
-        try:
-            if raw.endswith("%"):
-                raw = raw[:-1]
-            if "." in raw:
-                return float(raw)
-            return int(raw)
-        except ValueError:
-            try:
-                return float(raw)
-            except Exception:
-                return None
-
-    @staticmethod
-    def _date(value: Any) -> datetime | None:
-        if not value:
-            return None
-        if isinstance(value, (int, float)):
-            try:
-                return datetime.fromtimestamp(float(value))
-            except Exception:
-                return None
-        try:
-            parsed = parse_datetime(str(value), fuzzy=True)
-            return parsed
-        except Exception:
-            return None
-
-    @staticmethod
-    def _first(payload: Any, *candidates: str) -> Any:
-        if not isinstance(payload, dict):
-            return None
-        for key in candidates:
-            if key in payload and payload[key] not in (None, "", "NA", "N/A", "-"):
-                return payload[key]
-        return None
-
-    def _flatten_dict(self, payload: dict[str, Any] | list[Any] | Any) -> Iterable[dict[str, Any]]:
-        if isinstance(payload, dict):
-            yield payload
-            for value in payload.values():
-                yield from self._flatten_dict(value)
-            return
-        if isinstance(payload, list):
-            for item in payload:
-                yield from self._flatten_dict(item)
-
-    def _normalize_symbol(self, symbol: str) -> str:
-        return symbol.strip().upper().replace("-", "_")
-
-    def _to_error(self, exc: Exception, url: str) -> str:
-        return f"{type(exc).__name__} for {url}: {exc}"
-
-    def _json_like(self, value: str) -> bool:
-        value = value.strip()
-        return value.startswith("{") or value.startswith("[")
-
     async def _fetch(self, url: str) -> tuple[str, Any]:
         try:
             response = await self._client.get(url)
         except Exception as exc:
-            raise ProviderTemporaryError(self._to_error(exc, url))
+            raise ProviderTemporaryError(
+                f"{type(exc).__name__} for {url}: {exc}"
+            ) from exc
         if response.status_code == 404:
             raise ProviderPermanentError(f"Not found: {url}")
         try:
             response.raise_for_status()
         except Exception as exc:
-            raise ProviderTemporaryError(self._to_error(exc, url))
+            raise ProviderTemporaryError(
+                f"{type(exc).__name__} for {url}: {exc}"
+            ) from exc
 
         content_type = (response.headers.get("content-type") or "").lower()
-        body = response.text
         if "application/json" in content_type:
             return "json", response.json()
-        if self._json_like(body):
+        body = response.text
+        stripped = body.lstrip()
+        if stripped.startswith(("{", "[")):
             try:
                 return "json", response.json()
             except Exception:
                 pass
         return "html", body
 
-    def _extract_json_from_html(self, html: str) -> list[dict[str, Any]]:
+    def _normalize_symbol(self, symbol: str) -> str:
+        return symbol.strip().upper()
+
+    def _classify_header(
+        self, headers: list[str], aliases: dict[str, set[str]] = _MARKET_WATCH_HEADERS
+    ) -> dict[str, int]:
+        idx: dict[str, int] = {}
+        for i, raw in enumerate(headers):
+            label = raw.strip().lower()
+            for key, accepted_labels in aliases.items():
+                if key in idx:
+                    continue
+                if label in accepted_labels:
+                    idx[key] = i
+                    break
+        return idx
+
+    def _parse_market_watch_html(
+        self, html: str, sector_names: dict[str, str] | None = None
+    ) -> tuple[list[dict[str, Any]], datetime]:
         soup = BeautifulSoup(html, "lxml")
-        results: list[dict[str, Any]] = []
-        candidates = soup.find_all("script")
-        for tag in candidates:
-            text = tag.get_text(" ", strip=True)
-            if not text:
-                continue
-            if "window.__NUXT__" in text or "__NUXT__" in text:
-                matches = re.findall(r"(?:window\.)?__NUXT__\s*=\s*(\{.*\});", text, flags=re.S)
-                for match in matches:
-                    try:
-                        payload = json.loads(match)
-                        if isinstance(payload, dict):
-                            results.append(payload)
-                    except Exception:
-                        continue
-                continue
-            if "application/json" in (tag.get("type") or "").lower():
-                try:
-                    payload = json.loads(text)
-                    if isinstance(payload, (dict, list)):
-                        results.append(payload if isinstance(payload, dict) else {"data": payload})
-                except Exception:
-                    continue
-            match = re.search(r"\{\s*\"data\"\s*:\s*\[.*\]\s*\}\s*$", text, re.S)
-            if match:
-                try:
-                    payload = json.loads(match.group(0))
-                    if isinstance(payload, dict):
-                        results.append(payload)
-                except Exception:
-                    continue
+        table = soup.find("table")
+        if table is None:
+            raise ProviderParseError("market-watch: no <table> found")
 
-        if not results:
-            # secondary heuristics for pages that store JSON in HTML attrs
-            marker_pattern = re.compile(r"data-json=\"([^\"]+)\"")
-            for marker in marker_pattern.findall(html):
-                try:
-                    payload = json.loads(marker)
-                    if isinstance(payload, dict):
-                        results.append(payload)
-                except Exception:
-                    continue
-        return results
+        rows = table.find_all("tr")
+        if not rows:
+            raise ProviderParseError("market-watch: table has no rows")
 
-    def _pick_rows(self, payload: Any) -> tuple[dict[str, Any] | None, datetime | None]:
-        if not isinstance(payload, dict):
-            return None, None
-        data = self._first(payload, "data", "result", "payload", "response")
-        if isinstance(data, dict):
-            ts = self._date(self._first(data, "timestamp", "time", "asOf"))
-            if isinstance(data.get("data"), (dict, list)):
-                inner = self._first(data, "data")
-                if isinstance(inner, list):
-                    for row in inner:
-                        if isinstance(row, dict):
-                            return row, ts
-                if isinstance(inner, dict):
-                    return inner, ts
-            return data, ts
-        if isinstance(data, list) and data:
-            if isinstance(data[0], dict):
-                return data[0], self._date(self._first(data[0], "timestamp", "time", "asOf"))
-        if isinstance(data, list):
-            return {"data": data}, None
-        return payload, self._date(self._first(payload, "timestamp", "time", "asOf"))
+        header_cells = [
+            c.get_text(" ", strip=True) for c in rows[0].find_all(["th", "td"])
+        ]
+        idx = self._classify_header(header_cells)
+        if "symbol" not in idx or "current" not in idx:
+            raise ProviderParseError(
+                f"market-watch: could not map required columns from headers={header_cells}"
+            )
+
+        parsed: list[dict[str, Any]] = []
+        for row in rows[1:]:
+            cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
+            if len(cells) < max(idx.values()) + 1:
+                continue
+            symbol_raw = cells[idx["symbol"]].strip().upper()
+            if not symbol_raw or not re.fullmatch(r"[A-Z0-9._-]{1,20}", symbol_raw):
+                continue
+
+            ltp = _num(cells[idx["current"]])
+            if ltp is None:
+                # skip rows without a current price (halted / suspended)
+                continue
+
+            def col(key: str) -> Any:
+                i = idx.get(key)
+                return cells[i] if i is not None and i < len(cells) else None
+
+            sector_code = (col("sector") or "").strip()
+
+            parsed.append(
+                {
+                    "symbol": symbol_raw,
+                    "sector": (sector_names or {}).get(sector_code)
+                    or sector_code
+                    or None,
+                    "sector_code": sector_code or None,
+                    "listed_in": (col("listed_in") or "").strip() or None,
+                    "ldcp": _num(col("ldcp")),
+                    "open": _num(col("open")),
+                    "high": _num(col("high")),
+                    "low": _num(col("low")),
+                    "current": ltp,
+                    "change": _num(col("change")),
+                    "change_pct": _num(col("change_pct")),
+                    "volume": _num(col("volume")),
+                }
+            )
+
+        # We don't have a source timestamp in the HTML; use "now" as fetched_at.
+        return parsed, datetime.now(timezone.utc)
+
+    def _parse_indices_html(self, html: str) -> list[dict[str, Any]]:
+        soup = BeautifulSoup(html, "lxml")
+        table = soup.find("table")
+        if table is None:
+            raise ProviderParseError("indices: no <table> found")
+
+        rows = table.find_all("tr")
+        if not rows:
+            raise ProviderParseError("indices: table has no rows")
+        headers = [c.get_text(" ", strip=True) for c in rows[0].find_all(["th", "td"])]
+        idx = self._classify_header(headers, _INDEX_HEADERS)
+        if "symbol" not in idx or "current" not in idx:
+            raise ProviderParseError(
+                f"indices: could not map required columns from headers={headers}"
+            )
+
+        parsed: list[dict[str, Any]] = []
+        for row in rows[1:]:
+            cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
+            if len(cells) < max(idx.values()) + 1:
+                continue
+            symbol = cells[idx["symbol"]].strip().upper()
+            value = _num(cells[idx["current"]])
+            if not symbol or value is None:
+                continue
+
+            def col(key: str) -> Any:
+                position = idx.get(key)
+                return (
+                    cells[position]
+                    if position is not None and position < len(cells)
+                    else None
+                )
+
+            change_pct = _num(col("change_pct"))
+            parsed.append(
+                {
+                    "symbol": symbol,
+                    "name": symbol,
+                    "value": value,
+                    "high": _num(col("high")),
+                    "low": _num(col("low")),
+                    "change": _num(col("change")),
+                    "changePct": change_pct,
+                    "change_pct": change_pct,
+                }
+            )
+        if not parsed:
+            raise ProviderParseError("indices: no valid rows found")
+        return parsed
+
+    def _parse_sector_names_html(self, html: str) -> dict[str, str]:
+        soup = BeautifulSoup(html, "lxml")
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if not rows:
+                continue
+            headers = [
+                cell.get_text(" ", strip=True)
+                for cell in rows[0].find_all(["th", "td"])
+            ]
+            idx = self._classify_header(headers, _SECTOR_HEADERS)
+            if "code" not in idx or "name" not in idx:
+                continue
+
+            sectors: dict[str, str] = {}
+            for row in rows[1:]:
+                cells = [
+                    cell.get_text(" ", strip=True)
+                    for cell in row.find_all(["th", "td"])
+                ]
+                if len(cells) < max(idx.values()) + 1:
+                    continue
+                code = cells[idx["code"]].strip()
+                name = cells[idx["name"]].strip()
+                if code and name:
+                    sectors[code] = name
+            if sectors:
+                return sectors
+        raise ProviderParseError("sector-summary: sector code/name table not found")
+
+    async def _fetch_sector_names(self) -> dict[str, str]:
+        try:
+            kind, payload = await self._fetch(settings.provider_sector_summary_url)
+            if kind != "html":
+                raise ProviderParseError(
+                    f"sector-summary: expected HTML response, got {kind}"
+                )
+            self._sector_names = self._parse_sector_names_html(str(payload))
+        except (ProviderPermanentError, ProviderTemporaryError, ProviderParseError):
+            # Sector labels improve presentation but must not make quote refreshes fail.
+            pass
+        return self._sector_names
+
+    def _parse_regular_market_html(self, html: str) -> dict[str, Any]:
+        soup = BeautifulSoup(html, "lxml")
+        regular = soup.select_one('[data-key="REG"] .markets__item')
+        if regular is None:
+            raise ProviderParseError("market status: Regular market card not found")
+
+        stats: dict[str, str] = {}
+        for item in regular.select(".markets__item__stat"):
+            label = item.select_one(".markets__item__stat__label")
+            values = item.find_all("div", recursive=False)
+            if label is None or len(values) < 2:
+                continue
+            stats[label.get_text(" ", strip=True).lower()] = values[-1].get_text(
+                " ", strip=True
+            )
+
+        state = stats.get("state")
+        trades = _num(stats.get("trades"))
+        volume = _num(stats.get("volume"))
+        if (
+            not state
+            or not isinstance(trades, (int, float))
+            or not isinstance(volume, (int, float))
+        ):
+            raise ProviderParseError(
+                f"market status: incomplete Regular market stats={stats}"
+            )
+        return {
+            "market_status": state.strip().lower(),
+            "trades": int(trades),
+            "total_volume": int(volume),
+            "market_value": _num(stats.get("value")),
+        }
 
     async def fetch_market_overview(self) -> tuple[dict[str, Any], datetime | None]:
-        kind, payload = await self._fetch(settings.provider_market_summary_url)
-        source_ts: datetime | None = None
-        if kind == "json":
-            if isinstance(payload, list):
-                return {"indices": payload}, None
-            if isinstance(payload, dict):
-                source_ts = self._date(self._first(payload, "timestamp", "time", "asOf", "updatedAt"))
-                return payload, source_ts
-            raise ProviderParseError("market summary returned unsupported json type")
+        market_watch, indices_page, status_page, sector_names = await asyncio.gather(
+            self._fetch(settings.provider_market_summary_url),
+            self._fetch(settings.provider_indices_url),
+            self._fetch(settings.provider_market_status_url),
+            self._fetch_sector_names(),
+        )
+        for source_name, (kind, _payload) in {
+            "market-watch": market_watch,
+            "indices": indices_page,
+            "market status": status_page,
+        }.items():
+            if kind != "html":
+                raise ProviderParseError(
+                    f"{source_name}: expected HTML response, got {kind}"
+                )
 
-        html = str(payload)
-        extracted = self._extract_json_from_html(html)
-        if extracted:
-            for item in extracted:
-                row, row_ts = self._pick_rows(item)
-                if isinstance(row, dict):
-                    source_ts = source_ts or row_ts
-                    return {"extracted": row, "raw": row}, source_ts
-            if extracted and isinstance(extracted[0], dict) and "indices" in extracted[0]:
-                return extracted[0], None
+        rows, ts = self._parse_market_watch_html(
+            str(market_watch[1]), sector_names=sector_names
+        )
+        indices = self._parse_indices_html(str(indices_page[1]))
+        market_stats = self._parse_regular_market_html(str(status_page[1]))
 
-        # fallback: return a best effort index of visible rows
-        soup = BeautifulSoup(html, "lxml")
-        data = {"indices": []}
-        for row in soup.select("table tr"):
-            cols = [col.get_text(" ", strip=True) for col in row.find_all(["td", "th"])]
-            if len(cols) >= 2:
-                data["indices"].append({"name": cols[0], "value": self._num(cols[1])})
-        return data, source_ts or datetime.utcnow()
+        # Cache the parsed rows so per-symbol quote lookups can be served
+        # from the same fetch instead of re-scraping.
+        self._latest_watch = {row["symbol"]: row for row in rows}
+
+        return (
+            {
+                "indices": indices,
+                "tickers": rows,
+                "total_volume": market_stats["total_volume"],
+                "trades": market_stats["trades"],
+                "market_value": market_stats["market_value"],
+                "market_status": market_stats["market_status"],
+                "status": market_stats["market_status"],
+            },
+            ts,
+        )
+
+    def _row_to_quote(self, row: dict[str, Any]) -> QuoteSnapshot:
+        return QuoteSnapshot(
+            symbol=row["symbol"],
+            source=self.source,
+            name=None,  # market-watch does not include a full company name
+            ltp=row.get("current"),
+            change=row.get("change"),
+            change_pct=row.get("change_pct"),
+            volume=row.get("volume")
+            if isinstance(row.get("volume"), (int, float))
+            else None,
+            open=row.get("open"),
+            high=row.get("high"),
+            low=row.get("low"),
+            close=row.get("ldcp"),  # LDCP = last-day close price (previous close)
+            source_timestamp=datetime.now(timezone.utc),
+            raw=dict(row),
+        )
+
+    def latest_watch_rows(self) -> list[dict[str, Any]]:
+        """Rows from the most recent market-watch fetch (unfiltered)."""
+        return list(self._latest_watch.values())
 
     async def fetch_quote(self, symbol: str) -> QuoteSnapshot:
         symbol = self._normalize_symbol(symbol)
-        candidate_urls = [settings.provider_quote_url_template.format(symbol=symbol)]
-        for url in candidate_urls:
-            kind, payload = await self._fetch(url)
-            if kind == "json" and isinstance(payload, (dict, list)):
-                return self._parse_json_quote(symbol, payload)
-            if kind == "html":
-                quote = self._parse_html_quote(symbol, str(payload))
-                if quote and quote.ltp is not None:
-                    return quote
+        row = self._latest_watch.get(symbol)
+        if row is None:
+            # If the cache is empty (no market-watch pulled yet), pull it now.
+            await self.fetch_market_overview()
+            row = self._latest_watch.get(symbol)
+        if row is None:
+            raise ProviderPermanentError(
+                f"symbol '{symbol}' not present in PSX market-watch"
+            )
+        return self._row_to_quote(row)
 
-        raise ProviderParseError(f"Could not parse quote from response for {symbol}")
+    async def fetch_timeseries(
+        self, symbol: str, interval: str
+    ) -> list[TimeseriesPoint]:
+        """Fetch intraday or EOD time series for a symbol.
 
-    async def fetch_timeseries(self, symbol: str, interval: str) -> list[TimeseriesPoint]:
+        `interval` must be one of `int` (intraday) or `eod`.
+        The upstream JSON shape is `{"status":1,"data":[[unix_ts, price, volume, ...], ...]}`.
+        """
         symbol = self._normalize_symbol(symbol)
-        interval = interval.lower()
-        urls = [settings.provider_timeseries_url_template.format(symbol=symbol, interval=interval)]
-        # PSX endpoints are inconsistent; attempt a fallback shape.
-        urls.append(f"{settings.provider_base_url}/timeseries/{interval}/{symbol}")
-        urls.append(f"{settings.provider_base_url}/company/{symbol}/timeseries/{interval}/")
-        for url in urls:
-            kind, payload = await self._fetch(url)
-            if kind == "json":
-                points = self._parse_timeseries_json(symbol, interval, payload)
-                if points:
-                    return points
-            if kind == "html":
-                points = self._parse_timeseries_html(symbol, interval, str(payload))
-                if points:
-                    return points
-        return []
+        interval = interval.strip().lower()
+        if interval not in {"int", "eod"}:
+            raise ProviderPermanentError(
+                f"interval '{interval}' not supported; use 'int' or 'eod'"
+            )
 
-    async def fetch_eod(self, symbol: str, from_date=None, to_date=None) -> list[EodSnapshot]:
+        url = settings.provider_timeseries_url_template.format(
+            provider_base_url=settings.provider_base_url.rstrip("/"),
+            interval=interval,
+            symbol=symbol,
+        )
+        kind, payload = await self._fetch(url)
+        if kind != "json":
+            raise ProviderParseError(f"timeseries: expected JSON, got {kind}")
+
+        return self._parse_timeseries_json(symbol, interval, payload)
+
+    def _parse_timeseries_json(
+        self, symbol: str, interval: str, payload: Any
+    ) -> list[TimeseriesPoint]:
+        if not isinstance(payload, dict):
+            raise ProviderParseError(
+                f"timeseries: unexpected payload type {type(payload)}"
+            )
+        upstream_status = payload.get("status")
+        if upstream_status in (0, "0", False):
+            return []
+        if upstream_status not in (1, "1", "ok", True):
+            raise ProviderParseError(
+                f"timeseries: unexpected status {upstream_status!r}"
+            )
+        raw_rows = payload.get("data")
+        if not isinstance(raw_rows, list):
+            raise ProviderParseError("timeseries: 'data' must be a list")
+
+        points: list[TimeseriesPoint] = []
+        for row in raw_rows:
+            if not isinstance(row, list) or not row:
+                continue
+            try:
+                ts = datetime.fromtimestamp(float(row[0]), tz=timezone.utc)
+            except Exception:
+                continue
+            price = _num(row[1]) if len(row) > 1 else None
+            volume = _num(row[2]) if len(row) > 2 else None
+            # EOD rows carry an extra column (previous close). Ignore for now.
+            open_ = high = low = None
+            close = price
+            points.append(
+                TimeseriesPoint(
+                    symbol=symbol,
+                    interval=interval,
+                    period_start=ts,
+                    open=open_,
+                    high=high,
+                    low=low,
+                    close=close,
+                    volume=int(volume) if isinstance(volume, (int, float)) else None,
+                    source_timestamp=ts,
+                    source=self.source,
+                    raw={"row": row},
+                )
+            )
+        points.sort(key=lambda p: p.period_start)
+        return points
+
+    async def fetch_eod(
+        self,
+        symbol: str,
+        from_date: date | None = None,
+        to_date: date | None = None,
+    ) -> list[EodSnapshot]:
         points = await self.fetch_timeseries(symbol, interval="eod")
         output: list[EodSnapshot] = []
         for point in points:
@@ -284,154 +515,3 @@ class PsxDpsProvider(StockMarketDataProvider):
                 )
             )
         return output
-
-    def _parse_json_quote(self, symbol: str, payload: dict[str, Any] | list[Any]) -> QuoteSnapshot:
-        # Handle array payloads as "first item wins", then fallback object-level fields.
-        if isinstance(payload, list):
-            if not payload:
-                raise ProviderParseError(f"quote payload empty for {symbol}")
-            payload_dict = {}
-            for item in payload:
-                if isinstance(item, dict) and str(item.get("symbol", "")).upper() == symbol:
-                    payload_dict = item
-                    break
-            if not payload_dict and isinstance(payload[0], dict):
-                payload_dict = payload[0]
-            payload = payload_dict
-
-        if not isinstance(payload, dict):
-            raise ProviderParseError(f"unexpected quote payload type for {symbol}: {type(payload)}")
-
-        row, row_ts = self._pick_rows(payload)
-        if row is None or not isinstance(row, dict):
-            row = payload
-
-        row_ts = row_ts or self._date(self._first(row, "timestamp", "time", "asOf", "dateTime"))
-        return QuoteSnapshot(
-            symbol=symbol,
-            source=self.source,
-            name=self._first(row, "companyName", "name", "company_name", "symbolName"),
-            ltp=self._num(self._first(row, "ltp", "last", "lastPrice", "close", "trdPrc")),
-            change=self._num(self._first(row, "change", "changeAmt", "chng", "difference")),
-            change_pct=self._num(self._first(row, "changePct", "change_percent", "pctChange", "p_change")),
-            volume=self._num(self._first(row, "volume", "tradeVol", "vol", "tradeVolume")),
-            open=self._num(self._first(row, "open", "openPrice", "opening")),
-            high=self._num(self._first(row, "high", "highPrice", "max")),
-            low=self._num(self._first(row, "low", "lowPrice", "min")),
-            close=self._num(self._first(row, "close", "closePrice", "ltp", "tradePrice")),
-            source_timestamp=row_ts,
-            raw=dict(row),
-        )
-
-    def _parse_timeseries_json(
-        self,
-        symbol: str,
-        interval: str,
-        payload: Any,
-    ) -> list[TimeseriesPoint]:
-        points: list[TimeseriesPoint] = []
-        raw_rows: list[Any] = []
-        if isinstance(payload, list):
-            raw_rows = payload
-        elif isinstance(payload, dict):
-            data = self._first(payload, "data", "result", "rows")
-            if isinstance(data, list):
-                raw_rows = data
-            elif isinstance(data, dict):
-                rows = data.get("rows")
-                if isinstance(rows, list):
-                    raw_rows = rows
-
-        if not raw_rows and isinstance(payload, dict):
-            # flatten nested dicts and try any list-of-dicts
-            for candidate in self._flatten_dict(payload):
-                candidate_data = self._first(candidate, "data", "rows", "result")
-                if isinstance(candidate_data, list):
-                    raw_rows = candidate_data
-                    break
-
-        for row in raw_rows:
-            if not isinstance(row, dict):
-                continue
-            ts = self._date(self._first(row, "time", "timestamp", "date", "datetime"))
-            if ts is None:
-                continue
-            points.append(
-                TimeseriesPoint(
-                    symbol=symbol,
-                    interval=interval,
-                    period_start=ts,
-                    open=self._num(self._first(row, "open", "o")),
-                    high=self._num(self._first(row, "high", "h")),
-                    low=self._num(self._first(row, "low", "l")),
-                    close=self._num(self._first(row, "close", "c", "ltp")),
-                    volume=self._num(self._first(row, "volume", "v", "tradeVolume")),
-                    source_timestamp=ts,
-                    source=self.source,
-                    raw=row,
-                )
-            )
-        return sorted(points, key=lambda item: item.period_start)
-
-    def _parse_timeseries_html(self, symbol: str, interval: str, html: str) -> list[TimeseriesPoint]:
-        soup = BeautifulSoup(html, "lxml")
-        points: list[TimeseriesPoint] = []
-        for row in soup.select("table tr"):
-            cols = [col.get_text(" ", strip=True) for col in row.find_all(["td", "th"])]
-            if len(cols) < 5:
-                continue
-            ts = self._date(cols[0])
-            if ts is None:
-                continue
-            values = [self._num(col) for col in cols[1:6]]
-            if len(values) < 5:
-                continue
-            open_, high, low, close, volume = values[0], values[1], values[2], values[3], values[4]
-            points.append(
-                TimeseriesPoint(
-                    symbol=symbol,
-                    interval=interval,
-                    period_start=ts,
-                    open=open_,
-                    high=high,
-                    low=low,
-                    close=close,
-                    volume=int(volume) if isinstance(volume, float) else volume,
-                    source_timestamp=ts,
-                    source=self.source,
-                    raw={"row": cols},
-                )
-            )
-        return sorted(points, key=lambda item: item.period_start)
-
-    def _parse_html_quote(self, symbol: str, html: str) -> QuoteSnapshot:
-        soup = BeautifulSoup(html, "lxml")
-        rows = soup.select("table tr")
-        fields: dict[str, Any] = {}
-        text_rows = []
-        for row in rows:
-            cols = [col.get_text(" ", strip=True) for col in row.find_all(["th", "td"])]
-            if len(cols) >= 2:
-                fields[cols[0].strip().lower()] = cols[1].strip()
-            text_rows.extend(cols)
-
-        raw: dict[str, Any] = {"raw_rows": text_rows[:200]}
-        title = (soup.find("h1") or soup.find("title") or None)
-        name = title.get_text(" ", strip=True) if title else None
-        ts = self._date(self._first(fields, "time", "timestamp", "updated"))
-
-        return QuoteSnapshot(
-            symbol=symbol,
-            source=self.source,
-            name=fields.get("company") or fields.get("company name") or name,
-            ltp=self._num(self._first(fields, "ltp", "last", "price", "trade")),
-            change=self._num(self._first(fields, "change", "chg")),
-            change_pct=self._num(self._first(fields, "change percentage", "change %", "percent")),
-            volume=self._num(self._first(fields, "volume", "volume traded", "traded volume")),
-            open=self._num(self._first(fields, "open", "open price")),
-            high=self._num(self._first(fields, "high", "high price")),
-            low=self._num(self._first(fields, "low", "low price")),
-            close=self._num(self._first(fields, "close", "close price", "ltp")),
-            source_timestamp=ts or datetime.utcnow(),
-            raw=raw,
-        )

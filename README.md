@@ -21,7 +21,7 @@ pip install -r requirements.txt
 ```
 
 ```bash
-uvicorn psx_data_hub.main:app --reload
+uvicorn psx_data_hub.main:app --reload --no-server-header
 ```
 
 ```bash
@@ -42,9 +42,12 @@ docker compose up --build
 - `GET /v1/stocks`
 - `GET /v1/stocks/symbols`
 - `GET /v1/stocks/{symbol}`
-- `GET /v1/stocks/{symbol}/history?interval=5m&from=...&to=...`
-- `GET /v1/stocks/{symbol}/eod?from=...&to=...`
+- `GET /v1/stocks/{symbol}/description`
+- `GET /v1/stocks/{symbol}/history?interval={int|eod}&from=...&to=...&limit=...`
+- `GET /v1/stocks/{symbol}/eod?from=...&to=...&limit=...`
 - `GET /v1/indices`
+
+> `interval` accepts `int` (intraday, ~1-minute cadence from PSX) or `eod` (end-of-day). Older values like `5m`/`15m`/`1h`/`1d` are no longer valid — PSX's public feed does not expose them.
 
 ### Compatibility endpoints
 
@@ -60,8 +63,8 @@ docker compose up --build
 - `GET /sectors`
 - `GET /sectorgraph`
 - `GET /{company}/getalldata`
-- `GET/POST /{company}/description`
-- `GET/POST /{company}/equitydata`
+- `GET /{company}/description`
+- `GET /{company}/equitydata`
 - `GET /allindices`
 - `GET /getindex?symbol=KSE100`
 
@@ -131,7 +134,11 @@ docker compose --profile smoke up --build --abort-on-container-exit --exit-code-
 - No PSX license is shipped with this project.
 - Endpoint parsing and formats may need adjustments if upstream pages change.
 - This is designed for delayed/public-safe consumption patterns.
+- **v0.2.0 (2026-08-03)** — provider rewritten against the actual `dps.psx.com.pk` endpoints:
+  - Quotes come from `/market-watch`; index values come from `/indices`; market state and trade totals come from the homepage Regular-market card.
+  - Time series is fetched from `/timeseries/{int|eod}/{symbol}` — the `/company/{sym}` page is a static profile and no longer scraped for prices.
+  - One market-watch fetch populates quotes for every listed symbol; `MARKET_WATCHLIST` opts symbols into intraday and EOD polling.
 
 ## License
 
-MIT
+Apache License 2.0. See [LICENSE](LICENSE).

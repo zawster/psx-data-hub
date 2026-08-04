@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "psx-data-hub"
-version = "0.1.0"
+version = "0.2.0"
 description = "Open-source PSX delayed data API (5-minute delayed baseline)"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -29,7 +29,7 @@ dependencies = [
 psx-data-hub-worker = "psx_data_hub.worker:main"
 
 [project.optional-dependencies]
-dev = ["pytest>=8.2", "ruff>=0.5", "mypy>=1.10"]
+dev = ["pytest>=8.2", "pytest-asyncio>=0.23", "ruff>=0.5", "mypy>=1.10"]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/psx_data_hub"]

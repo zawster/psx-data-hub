@@ -26,6 +26,7 @@ def test_compat_auth_modes(mode, settings, seeded_client_factory):
     ) as client:
         assert client.get("/status").status_code == mode_settings["expected_public_status"]
         assert client.get("/volume").status_code == mode_settings["expected_public_status"]
+        assert client.get("/v1/market").status_code == mode_settings["expected_public_status"]
 
         if api_mode == "jwt":
             token = client.post("/token", data={"username": "demo", "password": "demo"})
@@ -33,6 +34,7 @@ def test_compat_auth_modes(mode, settings, seeded_client_factory):
             headers = {"Authorization": f"Bearer {token.json()['access_token']}"}
             assert client.get("/status", headers=headers).status_code == 200
             assert client.get("/volume", headers=headers).status_code == 200
+            assert client.get("/v1/market", headers=headers).status_code == 200
             assert client.get("/token-check", headers=headers).status_code == 200
             assert client.get("/token-check").status_code == 401
             return
@@ -40,6 +42,7 @@ def test_compat_auth_modes(mode, settings, seeded_client_factory):
         if api_mode == "api_key":
             assert client.get("/status", headers={"X-API-Key": "qa-key"}).status_code == 200
             assert client.get("/volume", headers={"X-API-Key": "qa-key"}).status_code == 200
+            assert client.get("/v1/market", headers={"X-API-Key": "qa-key"}).status_code == 200
             assert client.get("/token-check", headers={"X-API-Key": "qa-key"}).status_code == 401
             return
 
@@ -50,6 +53,8 @@ def test_compat_auth_modes(mode, settings, seeded_client_factory):
 
             assert client.get("/status", headers={"X-API-Key": "qa-key"}).status_code == 200
             assert client.get("/volume", headers={"X-API-Key": "qa-key"}).status_code == 200
+            assert client.get("/v1/market", headers={"X-API-Key": "qa-key"}).status_code == 200
             assert client.get("/status", headers=token_headers).status_code == 200
             assert client.get("/volume", headers=token_headers).status_code == 200
+            assert client.get("/v1/market", headers=token_headers).status_code == 200
             assert client.get("/token-check", headers=token_headers).status_code == 200

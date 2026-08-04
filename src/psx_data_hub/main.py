@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import uvicorn
 
-from psx_data_hub.api.app import app
+from psx_data_hub.api.app import app  # noqa: F401 - ASGI entry point export
 from psx_data_hub.core.config import settings
 
 
@@ -12,6 +12,7 @@ def main() -> None:
         host="0.0.0.0",
         port=8000,
         reload=settings.env == "local",
+        server_header=not settings.hide_server_header,
     )
 
 

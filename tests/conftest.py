@@ -38,24 +38,9 @@ def _seed_database() -> None:
             await session.commit()
 
             repo = DataRepository(session)
-            await repo.upsert_symbol("PSO", "Power Cement Limited")
-            await session.execute(
-                models.Symbol.__table__.update()
-                .where(models.Symbol.symbol == "PSO")
-                .values(sector="Construction")
-            )
-            await repo.upsert_symbol("OGDC", "Oil & Gas Development")
-            await session.execute(
-                models.Symbol.__table__.update()
-                .where(models.Symbol.symbol == "OGDC")
-                .values(sector="Energy")
-            )
-            await repo.upsert_symbol("HBL", "Habib Bank Limited")
-            await session.execute(
-                models.Symbol.__table__.update()
-                .where(models.Symbol.symbol == "HBL")
-                .values(sector="Financials")
-            )
+            await repo.upsert_symbol("PSO", "Pakistan State Oil Company Limited", "Energy")
+            await repo.upsert_symbol("OGDC", "Oil & Gas Development Company Limited", "Energy")
+            await repo.upsert_symbol("HBL", "Habib Bank Limited", "Financials")
             await session.commit()
 
             market_snapshot_payload = {
@@ -78,7 +63,7 @@ def _seed_database() -> None:
                 QuoteSnapshot(
                     symbol="PSO",
                     source="seed",
-                    name="Power Cement Limited",
+                    name="Pakistan State Oil Company Limited",
                     ltp=325.25,
                     change=5.75,
                     change_pct=1.81,
@@ -95,7 +80,7 @@ def _seed_database() -> None:
                 QuoteSnapshot(
                     symbol="OGDC",
                     source="seed",
-                    name="Oil & Gas Development",
+                    name="Oil & Gas Development Company Limited",
                     ltp=88.3,
                     change=-1.8,
                     change_pct=-2.0,
@@ -130,7 +115,7 @@ def _seed_database() -> None:
                 [
                     TimeseriesPoint(
                         symbol="PSO",
-                        interval="5m",
+                        interval="eod",
                         period_start=now - timedelta(minutes=15),
                         open=323.0,
                         high=326.0,
@@ -142,7 +127,7 @@ def _seed_database() -> None:
                     ),
                     TimeseriesPoint(
                         symbol="PSO",
-                        interval="5m",
+                        interval="eod",
                         period_start=now - timedelta(minutes=10),
                         open=324.5,
                         high=328.0,
