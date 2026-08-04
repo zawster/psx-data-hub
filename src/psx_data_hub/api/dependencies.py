@@ -1,14 +1,14 @@
 from __future__ import annotations
 
+import secrets
 from typing import Annotated
 
 from fastapi import Depends, HTTPException, status
-from fastapi.security import APIKeyHeader
-from fastapi.security import OAuth2PasswordBearer
+from fastapi.security import APIKeyHeader, OAuth2PasswordBearer
 
+from psx_data_hub.api import auth
 from psx_data_hub.core.config import settings
 from psx_data_hub.core.database import AsyncSessionLocal
-from psx_data_hub.api import auth
 from psx_data_hub.storage.repo import DataRepository
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
@@ -20,15 +20,32 @@ async def get_repo() -> DataRepository:
         yield DataRepository(session)
 
 
-def require_api_key(api_key: Annotated[str | None, Depends(api_key_header)]):
-    if not settings.api_key_required:
-        return "public"
-    if not api_key or api_key not in settings.api_keys:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing X-API-Key",
-        )
-    return api_key
+def _api_key_matches(candidate: str | None) -> bool:
+    """Constant-time comparison of `candidate` against the configured key set.
+
+    Prevents trivial timing side-channels on `key in [...]` (BUG-12).
+    """
+    if not candidate:
+        return False
+    match = False
+    for known in settings.api_keys:
+        # `compare_digest` returns False if lengths differ; the OR keeps us
+        # from short-circuiting through the loop.
+        match |= secrets.compare_digest(str(candidate), str(known))
+    return match
+
+
+def require_api_key(
+    api_key: Annotated[str | None, Depends(api_key_header)],
+    token: Annotated[str | None, Depends(oauth2_bearer)] = None,
+):
+    """Apply the same configured auth policy used by compatibility routes.
+
+    The historical name is retained because all `/v1` routers import it, but
+    `AUTH_MODE` is authoritative for the whole API. `API_KEY_REQUIRED` remains
+    the backwards-compatible switch used when authentication mode is `off`.
+    """
+    return require_auth(api_key=api_key, token=token)
 
 
 def require_auth(
@@ -36,7 +53,7 @@ def require_auth(
     token: Annotated[str | None, Depends(oauth2_bearer)] = None,
 ):
     if settings.auth_mode == "off":
-        if settings.api_key_required and api_key is not None and api_key in settings.api_keys:
+        if settings.api_key_required and _api_key_matches(api_key):
             return {"type": "api-key", "principal": api_key}
         if settings.api_key_required:
             raise HTTPException(
@@ -47,7 +64,7 @@ def require_auth(
         return {"type": "public"}
 
     if settings.auth_mode in {"api_key", "hybrid"}:
-        if api_key is not None and api_key in settings.api_keys:
+        if _api_key_matches(api_key):
             return {"type": "api-key", "principal": api_key}
 
     if settings.auth_mode in {"jwt", "hybrid"}:

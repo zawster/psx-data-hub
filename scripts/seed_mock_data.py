@@ -25,15 +25,29 @@ async def _seed() -> None:
 
         repo = DataRepository(session)
 
-        await repo.upsert_symbol("PSO", "Power Cement Limited")
-        await repo.upsert_symbol("OGDC", "Oil & Gas Development")
-        await repo.upsert_symbol("HBL", "Habib Bank Limited")
+        await repo.upsert_symbol("PSO", "Pakistan State Oil Company Limited", "Energy")
+        await repo.upsert_symbol(
+            "OGDC", "Oil & Gas Development Company Limited", "Energy"
+        )
+        await repo.upsert_symbol("HBL", "Habib Bank Limited", "Financials")
 
         await repo.upsert_market_snapshot(
             payload={
                 "indices": [
-                    {"symbol": "KSE100", "name": "KSE-100", "value": 65000.0, "change": 120.4, "changePct": 0.185},
-                    {"symbol": "KSE200", "name": "KSE-200", "value": 42000.0, "change": -12.0, "changePct": -0.029},
+                    {
+                        "symbol": "KSE100",
+                        "name": "KSE-100",
+                        "value": 65000.0,
+                        "change": 120.4,
+                        "changePct": 0.185,
+                    },
+                    {
+                        "symbol": "KSE200",
+                        "name": "KSE-200",
+                        "value": 42000.0,
+                        "change": -12.0,
+                        "changePct": -0.029,
+                    },
                 ],
                 "total_volume": 12500000,
                 "trades": 9876,
@@ -48,7 +62,7 @@ async def _seed() -> None:
             QuoteSnapshot(
                 symbol="PSO",
                 source="seed",
-                name="Power Cement Limited",
+                name="Pakistan State Oil Company Limited",
                 ltp=325.25,
                 change=5.75,
                 change_pct=1.81,
@@ -65,7 +79,7 @@ async def _seed() -> None:
             QuoteSnapshot(
                 symbol="OGDC",
                 source="seed",
-                name="Oil & Gas Development",
+                name="Oil & Gas Development Company Limited",
                 ltp=88.3,
                 change=-1.8,
                 change_pct=-2.0,
@@ -100,7 +114,7 @@ async def _seed() -> None:
             [
                 TimeseriesPoint(
                     symbol="PSO",
-                    interval="5m",
+                    interval="int",
                     period_start=now - timedelta(minutes=15),
                     open=323.0,
                     high=326.0,
@@ -112,7 +126,7 @@ async def _seed() -> None:
                 ),
                 TimeseriesPoint(
                     symbol="PSO",
-                    interval="5m",
+                    interval="int",
                     period_start=now - timedelta(minutes=10),
                     open=324.5,
                     high=328.0,
