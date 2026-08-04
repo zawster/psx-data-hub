@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import re
 from datetime import date, datetime, timezone
 from typing import Any
@@ -31,6 +32,15 @@ _MARKET_WATCH_HEADERS = {
     "change": {"change", "chg"},
     "change_pct": {"change (%)", "change%", "change percent", "%chg"},
     "volume": {"volume", "vol", "tradevolume"},
+}
+
+_INDEX_HEADERS = {
+    "symbol": {"index", "symbol"},
+    "high": {"high"},
+    "low": {"low"},
+    "current": {"current", "value"},
+    "change": {"change", "chg"},
+    "change_pct": {"% change", "change (%)", "change%", "%chg"},
 }
 
 
@@ -73,7 +83,9 @@ class PsxDpsProvider(StockMarketDataProvider):
         self._owned_client = client is None
         self._client = client or httpx.AsyncClient(
             timeout=settings.request_timeout_seconds,
-            headers={"User-Agent": "psx-data-hub/0.2.0 (+https://github.com/zawster/psx-data-hub)"},
+            headers={
+                "User-Agent": "psx-data-hub/0.2.0 (+https://github.com/zawster/psx-data-hub)"
+            },
         )
         self._latest_watch: dict[str, dict[str, Any]] = {}
 
@@ -85,13 +97,17 @@ class PsxDpsProvider(StockMarketDataProvider):
         try:
             response = await self._client.get(url)
         except Exception as exc:
-            raise ProviderTemporaryError(f"{type(exc).__name__} for {url}: {exc}") from exc
+            raise ProviderTemporaryError(
+                f"{type(exc).__name__} for {url}: {exc}"
+            ) from exc
         if response.status_code == 404:
             raise ProviderPermanentError(f"Not found: {url}")
         try:
             response.raise_for_status()
         except Exception as exc:
-            raise ProviderTemporaryError(f"{type(exc).__name__} for {url}: {exc}") from exc
+            raise ProviderTemporaryError(
+                f"{type(exc).__name__} for {url}: {exc}"
+            ) from exc
 
         content_type = (response.headers.get("content-type") or "").lower()
         if "application/json" in content_type:
@@ -108,19 +124,23 @@ class PsxDpsProvider(StockMarketDataProvider):
     def _normalize_symbol(self, symbol: str) -> str:
         return symbol.strip().upper()
 
-    def _classify_header(self, headers: list[str]) -> dict[str, int]:
+    def _classify_header(
+        self, headers: list[str], aliases: dict[str, set[str]] = _MARKET_WATCH_HEADERS
+    ) -> dict[str, int]:
         idx: dict[str, int] = {}
         for i, raw in enumerate(headers):
             label = raw.strip().lower()
-            for key, aliases in _MARKET_WATCH_HEADERS.items():
+            for key, accepted_labels in aliases.items():
                 if key in idx:
                     continue
-                if label in aliases:
+                if label in accepted_labels:
                     idx[key] = i
                     break
         return idx
 
-    def _parse_market_watch_html(self, html: str) -> tuple[list[dict[str, Any]], datetime]:
+    def _parse_market_watch_html(
+        self, html: str
+    ) -> tuple[list[dict[str, Any]], datetime]:
         soup = BeautifulSoup(html, "lxml")
         table = soup.find("table")
         if table is None:
@@ -130,7 +150,9 @@ class PsxDpsProvider(StockMarketDataProvider):
         if not rows:
             raise ProviderParseError("market-watch: table has no rows")
 
-        header_cells = [c.get_text(" ", strip=True) for c in rows[0].find_all(["th", "td"])]
+        header_cells = [
+            c.get_text(" ", strip=True) for c in rows[0].find_all(["th", "td"])
+        ]
         idx = self._classify_header(header_cells)
         if "symbol" not in idx or "current" not in idx:
             raise ProviderParseError(
@@ -175,89 +197,123 @@ class PsxDpsProvider(StockMarketDataProvider):
         return parsed, datetime.now(timezone.utc)
 
     def _parse_indices_html(self, html: str) -> list[dict[str, Any]]:
-        """Parse the standalone `/indices` page.
-
-        The page has a table with header `Index | High | Low | Current | Change | % Change`
-        and one row per market index (KSE100, KSE100PR, ALLSHR, KSE30, KMI30, …).
-        """
         soup = BeautifulSoup(html, "lxml")
         table = soup.find("table")
         if table is None:
-            return []
-        rows = table.find_all("tr")
-        if len(rows) < 2:
-            return []
-        # Column order is fixed on PSX's page today; check header just to be safe.
-        header = [c.get_text(" ", strip=True).lower() for c in rows[0].find_all(["th", "td"])]
-        expected_prefix = ["index", "high", "low", "current", "change"]
-        if header[: len(expected_prefix)] != expected_prefix:
-            return []
+            raise ProviderParseError("indices: no <table> found")
 
-        indices: list[dict[str, Any]] = []
+        rows = table.find_all("tr")
+        if not rows:
+            raise ProviderParseError("indices: table has no rows")
+        headers = [c.get_text(" ", strip=True) for c in rows[0].find_all(["th", "td"])]
+        idx = self._classify_header(headers, _INDEX_HEADERS)
+        if "symbol" not in idx or "current" not in idx:
+            raise ProviderParseError(
+                f"indices: could not map required columns from headers={headers}"
+            )
+
+        parsed: list[dict[str, Any]] = []
         for row in rows[1:]:
             cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
-            if len(cells) < 6:
+            if len(cells) < max(idx.values()) + 1:
                 continue
-            symbol = cells[0].strip().upper()
-            if not re.fullmatch(r"[A-Z0-9._-]{1,32}", symbol):
+            symbol = cells[idx["symbol"]].strip().upper()
+            value = _num(cells[idx["current"]])
+            if not symbol or value is None:
                 continue
-            indices.append(
+
+            def col(key: str) -> Any:
+                position = idx.get(key)
+                return (
+                    cells[position]
+                    if position is not None and position < len(cells)
+                    else None
+                )
+
+            change_pct = _num(col("change_pct"))
+            parsed.append(
                 {
                     "symbol": symbol,
                     "name": symbol,
-                    "high": _num(cells[1]),
-                    "low": _num(cells[2]),
-                    "value": _num(cells[3]),
-                    "change": _num(cells[4]),
-                    "changePct": _num(cells[5]),
-                    "change_pct": _num(cells[5]),
+                    "value": value,
+                    "high": _num(col("high")),
+                    "low": _num(col("low")),
+                    "change": _num(col("change")),
+                    "changePct": change_pct,
+                    "change_pct": change_pct,
                 }
             )
-        return indices
+        if not parsed:
+            raise ProviderParseError("indices: no valid rows found")
+        return parsed
 
-    async def _fetch_indices(self) -> list[dict[str, Any]]:
-        """Fetch the `/indices` page. Returns [] on any failure — indices are
-        a soft dependency of market overview."""
-        try:
-            base = settings.provider_base_url.rstrip("/")
-            kind, payload = await self._fetch(f"{base}/indices")
-        except Exception:
-            return []
-        if kind != "html":
-            return []
-        return self._parse_indices_html(str(payload))
+    def _parse_regular_market_html(self, html: str) -> dict[str, Any]:
+        soup = BeautifulSoup(html, "lxml")
+        regular = soup.select_one('[data-key="REG"] .markets__item')
+        if regular is None:
+            raise ProviderParseError("market status: Regular market card not found")
+
+        stats: dict[str, str] = {}
+        for item in regular.select(".markets__item__stat"):
+            label = item.select_one(".markets__item__stat__label")
+            values = item.find_all("div", recursive=False)
+            if label is None or len(values) < 2:
+                continue
+            stats[label.get_text(" ", strip=True).lower()] = values[-1].get_text(
+                " ", strip=True
+            )
+
+        state = stats.get("state")
+        trades = _num(stats.get("trades"))
+        volume = _num(stats.get("volume"))
+        if (
+            not state
+            or not isinstance(trades, (int, float))
+            or not isinstance(volume, (int, float))
+        ):
+            raise ProviderParseError(
+                f"market status: incomplete Regular market stats={stats}"
+            )
+        return {
+            "market_status": state.strip().lower(),
+            "trades": int(trades),
+            "total_volume": int(volume),
+            "market_value": _num(stats.get("value")),
+        }
 
     async def fetch_market_overview(self) -> tuple[dict[str, Any], datetime | None]:
-        kind, payload = await self._fetch(settings.provider_market_summary_url)
-        if kind != "html":
-            raise ProviderParseError(
-                "market-watch: expected HTML response, got json"
-            )
-        rows, ts = self._parse_market_watch_html(str(payload))
+        market_watch, indices_page, status_page = await asyncio.gather(
+            self._fetch(settings.provider_market_summary_url),
+            self._fetch(settings.provider_indices_url),
+            self._fetch(settings.provider_market_status_url),
+        )
+        for source_name, (kind, _payload) in {
+            "market-watch": market_watch,
+            "indices": indices_page,
+            "market status": status_page,
+        }.items():
+            if kind != "html":
+                raise ProviderParseError(
+                    f"{source_name}: expected HTML response, got {kind}"
+                )
+
+        rows, ts = self._parse_market_watch_html(str(market_watch[1]))
+        indices = self._parse_indices_html(str(indices_page[1]))
+        market_stats = self._parse_regular_market_html(str(status_page[1]))
 
         # Cache the parsed rows so per-symbol quote lookups can be served
         # from the same fetch instead of re-scraping.
         self._latest_watch = {row["symbol"]: row for row in rows}
 
-        indices = await self._fetch_indices()
-        total_volume = sum(
-            int(row["volume"])
-            for row in rows
-            if isinstance(row.get("volume"), (int, float))
-        )
-
-        # `market_status` and `trades` are NOT available from /market-watch. We
-        # intentionally return "unknown" and null instead of guessing — the
-        # previous code inferred "open" whenever any row was present and
-        # counted ticker rows as trades, which was wrong after market close.
         return (
             {
                 "indices": indices,
                 "tickers": rows,
-                "total_volume": total_volume,
-                "trades": None,
-                "market_status": "unknown",
-                "status": "unknown",
+                "total_volume": market_stats["total_volume"],
+                "trades": market_stats["trades"],
+                "market_value": market_stats["market_value"],
+                "market_status": market_stats["market_status"],
+                "status": market_stats["market_status"],
             },
             ts,
         )
@@ -270,7 +326,9 @@ class PsxDpsProvider(StockMarketDataProvider):
             ltp=row.get("current"),
             change=row.get("change"),
             change_pct=row.get("change_pct"),
-            volume=row.get("volume") if isinstance(row.get("volume"), (int, float)) else None,
+            volume=row.get("volume")
+            if isinstance(row.get("volume"), (int, float))
+            else None,
             open=row.get("open"),
             high=row.get("high"),
             low=row.get("low"),
@@ -291,10 +349,14 @@ class PsxDpsProvider(StockMarketDataProvider):
             await self.fetch_market_overview()
             row = self._latest_watch.get(symbol)
         if row is None:
-            raise ProviderPermanentError(f"symbol '{symbol}' not present in PSX market-watch")
+            raise ProviderPermanentError(
+                f"symbol '{symbol}' not present in PSX market-watch"
+            )
         return self._row_to_quote(row)
 
-    async def fetch_timeseries(self, symbol: str, interval: str) -> list[TimeseriesPoint]:
+    async def fetch_timeseries(
+        self, symbol: str, interval: str
+    ) -> list[TimeseriesPoint]:
         """Fetch intraday or EOD time series for a symbol.
 
         `interval` must be one of `int` (intraday) or `eod`.
@@ -321,25 +383,20 @@ class PsxDpsProvider(StockMarketDataProvider):
     def _parse_timeseries_json(
         self, symbol: str, interval: str, payload: Any
     ) -> list[TimeseriesPoint]:
-        # Anything that's not a dict with a `data` list is malformed. Surface
-        # that as a parse error so upstream schema drift is noisy rather than
-        # silently returning [] (round-2 review finding).
         if not isinstance(payload, dict):
             raise ProviderParseError(
-                f"timeseries: unexpected payload type {type(payload).__name__}"
+                f"timeseries: unexpected payload type {type(payload)}"
             )
-        if "data" not in payload:
-            raise ProviderParseError(
-                f"timeseries: response missing 'data' key; keys={list(payload)[:5]}"
-            )
-        if payload.get("status") not in (1, "1", "ok", True, None):
-            # Provider explicitly reported an error status — legitimate empty.
+        upstream_status = payload.get("status")
+        if upstream_status in (0, "0", False):
             return []
+        if upstream_status not in (1, "1", "ok", True):
+            raise ProviderParseError(
+                f"timeseries: unexpected status {upstream_status!r}"
+            )
         raw_rows = payload.get("data")
         if not isinstance(raw_rows, list):
-            raise ProviderParseError(
-                f"timeseries: 'data' is {type(raw_rows).__name__}, expected list"
-            )
+            raise ProviderParseError("timeseries: 'data' must be a list")
 
         points: list[TimeseriesPoint] = []
         for row in raw_rows:
@@ -401,5 +458,3 @@ class PsxDpsProvider(StockMarketDataProvider):
                 )
             )
         return output
-
-

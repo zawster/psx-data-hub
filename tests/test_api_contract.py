@@ -35,7 +35,9 @@ def test_service_contract_off_mode(seeded_client_factory):
         assert desc.status_code == 200
         desc_payload = desc.json()
         assert desc_payload["symbol"] == "PSO"
-        assert desc_payload["sector"] == "Energy"  # seeded via upsert_symbol(sector=...)
+        assert (
+            desc_payload["sector"] == "Energy"
+        )  # seeded via upsert_symbol(sector=...)
 
         # Bad interval is rejected (BUG-5)
         bad_interval = client.get(
@@ -94,6 +96,7 @@ def test_service_contract_off_mode(seeded_client_factory):
         trades = client.get("/tradesinstockmarket")
         assert trades.status_code == 200
         assert trades.json()["metric"] == "trades_in_stock_market"
+        assert trades.json()["value"] == 9876
 
         total_companies = client.get("/totalcompanies")
         assert total_companies.status_code == 200
@@ -133,24 +136,43 @@ def test_service_contract_off_mode(seeded_client_factory):
         assert equity_data.status_code == 200
         assert equity_data.json()["symbol"] == "PSO"
 
+        for path in [
+            "/v1/health",
+            "/v1/status",
+            "/v1/stocks",
+            "/v1/indices",
+            "/status",
+        ]:
+            head = client.head(path)
+            assert head.status_code == 200
+            assert head.content == b""
+
 
 def test_compat_token_flow(seeded_client_factory):
     with seeded_client_factory() as client:
-        token_resp = client.post("/token", data={"username": "demo", "password": "demo"})
+        token_resp = client.post(
+            "/token", data={"username": "demo", "password": "demo"}
+        )
         assert token_resp.status_code == 200
         token = token_resp.json()["access_token"]
         assert isinstance(token, str) and len(token) > 20
 
-        valid_check = client.get("/token-check", headers={"Authorization": f"Bearer {token}"})
+        valid_check = client.get(
+            "/token-check", headers={"Authorization": f"Bearer {token}"}
+        )
         assert valid_check.status_code == 200
         assert valid_check.json()["message"] == "You are authenticated!"
 
         assert client.get("/token-check").status_code == 401
 
-        bad_token = client.get("/token-check", headers={"Authorization": "Bearer invalid.token.value"})
+        bad_token = client.get(
+            "/token-check", headers={"Authorization": "Bearer invalid.token.value"}
+        )
         assert bad_token.status_code == 401
 
-        bad_login = client.post("/token", data={"username": "demo", "password": "wrong"})
+        bad_login = client.post(
+            "/token", data={"username": "demo", "password": "wrong"}
+        )
         assert bad_login.status_code == 401
 
 
@@ -171,7 +193,9 @@ def test_jwt_secret_rejected_in_non_local(monkeypatch):
     except Exception as exc:
         boot_error = exc
 
-    assert boot_error is not None, "config must reject default JWT secret when ENV != local"
+    assert boot_error is not None, (
+        "config must reject default JWT secret when ENV != local"
+    )
     # Reset for other tests.
     monkeypatch.setenv("ENV", "local")
     monkeypatch.setenv("JWT_SECRET_KEY", "CHANGE_ME_IN_PRODUCTION")

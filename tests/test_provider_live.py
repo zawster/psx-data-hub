@@ -10,16 +10,29 @@ degrades to empty responses.
 
 from __future__ import annotations
 
+import asyncio
 import os
 
 import httpx
 import pytest
 import pytest_asyncio
 
+from psx_data_hub.providers.base import ProviderTemporaryError
+
 LIVE = os.environ.get("PSX_LIVE") == "1"
 
 
 pytestmark = pytest.mark.skipif(not LIVE, reason="set PSX_LIVE=1 to run live checks")
+
+
+async def _retry_temporary(callback, attempts: int = 3):
+    for attempt in range(attempts):
+        try:
+            return await callback()
+        except ProviderTemporaryError:
+            if attempt == attempts - 1:
+                raise
+            await asyncio.sleep(0.5 * (attempt + 1))
 
 
 @pytest_asyncio.fixture
@@ -36,10 +49,14 @@ async def test_market_watch_returns_price_table(client):
     from psx_data_hub.providers.psx_dps_provider import PsxDpsProvider
 
     provider = PsxDpsProvider(client=client)
-    payload, ts = await provider.fetch_market_overview()
+    payload, ts = await _retry_temporary(provider.fetch_market_overview)
     assert ts is not None
     tickers = payload.get("tickers") or []
+    indices = payload.get("indices") or []
     assert len(tickers) > 100, f"expected many tickers, got {len(tickers)}"
+    assert len(indices) > 5, f"expected live indices, got {len(indices)}"
+    assert isinstance(payload.get("trades"), int)
+    assert isinstance(payload.get("market_status"), str) and payload["market_status"]
 
     # A handful of PSX blue-chips must appear.
     symbols = {row["symbol"] for row in tickers}
@@ -56,7 +73,7 @@ async def test_indices_endpoint_returns_named_indices(client):
     from psx_data_hub.providers.psx_dps_provider import PsxDpsProvider
 
     provider = PsxDpsProvider(client=client)
-    payload, _ = await provider.fetch_market_overview()
+    payload, _ = await _retry_temporary(provider.fetch_market_overview)
     indices = payload.get("indices") or []
     assert len(indices) > 0, "expected at least one index row from /indices"
     names = {row["symbol"] for row in indices}
@@ -70,7 +87,9 @@ async def test_intraday_timeseries_returns_json(client):
     from psx_data_hub.providers.psx_dps_provider import PsxDpsProvider
 
     provider = PsxDpsProvider(client=client)
-    points = await provider.fetch_timeseries("PSO", interval="int")
+    points = await _retry_temporary(
+        lambda: provider.fetch_timeseries("PSO", interval="int")
+    )
     assert isinstance(points, list)
     # We can't guarantee non-empty (market may be closed), but the call must
     # not raise and each point must be well-formed.

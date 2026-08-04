@@ -10,6 +10,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from psx_data_hub.providers.base import EodSnapshot, QuoteSnapshot, TimeseriesPoint
 from psx_data_hub.storage import models
 
+_SQLITE_BATCH_SIZE = 75
+
 
 def _utcnow() -> datetime:
     """Return an aware UTC datetime. Prefer this over datetime.utcnow()."""
@@ -135,7 +137,9 @@ class DataRepository:
 
     async def get_latest_market_snapshot(self) -> models.MarketSnapshot | None:
         result = await self._session.execute(
-            select(models.MarketSnapshot).order_by(models.MarketSnapshot.fetched_at.desc()).limit(1)
+            select(models.MarketSnapshot)
+            .order_by(models.MarketSnapshot.fetched_at.desc())
+            .limit(1)
         )
         return result.scalar_one_or_none()
 
@@ -168,7 +172,9 @@ class DataRepository:
         await self._session.refresh(row)
         return row
 
-    async def upsert_symbols(self, symbols: Iterable[tuple[str, str | None]]) -> list[models.Symbol]:
+    async def upsert_symbols(
+        self, symbols: Iterable[tuple[str, str | None]]
+    ) -> list[models.Symbol]:
         rows: list[models.Symbol] = []
         for symbol, name in symbols:
             rows.append(await self.upsert_symbol(symbol, name))
@@ -252,12 +258,15 @@ class DataRepository:
             return 0
         dialect = self._session.bind.dialect.name if self._session.bind else ""
         if dialect == "sqlite":
-            stmt = sqlite_insert(models.HistoryPoint).values(rows)
-            stmt = stmt.on_conflict_do_nothing(
-                index_elements=["symbol", "interval", "period_start"]
-            )
-            result = await self._session.execute(stmt)
-            added = result.rowcount or 0
+            for offset in range(0, len(rows), _SQLITE_BATCH_SIZE):
+                stmt = sqlite_insert(models.HistoryPoint).values(
+                    rows[offset : offset + _SQLITE_BATCH_SIZE]
+                )
+                stmt = stmt.on_conflict_do_nothing(
+                    index_elements=["symbol", "interval", "period_start"]
+                )
+                result = await self._session.execute(stmt)
+                added += result.rowcount or 0
         else:
             # Portable fallback — one row at a time.
             for row in rows:
@@ -294,10 +303,13 @@ class DataRepository:
             return 0
         dialect = self._session.bind.dialect.name if self._session.bind else ""
         if dialect == "sqlite":
-            stmt = sqlite_insert(models.EodRecord).values(rows)
-            stmt = stmt.on_conflict_do_nothing(index_elements=["symbol", "date"])
-            result = await self._session.execute(stmt)
-            added = result.rowcount or 0
+            for offset in range(0, len(rows), _SQLITE_BATCH_SIZE):
+                stmt = sqlite_insert(models.EodRecord).values(
+                    rows[offset : offset + _SQLITE_BATCH_SIZE]
+                )
+                stmt = stmt.on_conflict_do_nothing(index_elements=["symbol", "date"])
+                result = await self._session.execute(stmt)
+                added += result.rowcount or 0
         else:
             for row in rows:
                 try:

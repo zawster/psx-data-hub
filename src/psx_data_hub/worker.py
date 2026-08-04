@@ -69,6 +69,10 @@ async def poll_once() -> None:
                         log.warning(
                             "eod refresh failed symbol=%s err=%s", symbol, exc
                         )
+                    try:
+                        await service.refresh_eod(symbol)
+                    except Exception as exc:
+                        log.warning("eod refresh failed symbol=%s err=%s", symbol, exc)
                     await asyncio.sleep(0.2)
 
             removed = await service.prune_old_quotes()
@@ -78,7 +82,9 @@ async def poll_once() -> None:
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
-    log.info("psx-data-hub worker started; interval=%ss", settings.poll_interval_seconds)
+    log.info(
+        "psx-data-hub worker started; interval=%ss", settings.poll_interval_seconds
+    )
     while True:
         start = datetime.now(timezone.utc)
         try:

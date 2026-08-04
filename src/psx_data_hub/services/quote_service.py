@@ -3,7 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import random
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time, timedelta, timezone
 from typing import Any, Iterable
 
 from psx_data_hub.providers.base import (
@@ -54,7 +54,9 @@ class MarketDataService:
             symbol="__market__",
             max_attempts=3,
         )
-        await self.repo.upsert_market_snapshot(payload, source_ts, source=self.provider.source)
+        await self.repo.upsert_market_snapshot(
+            payload, source_ts, source=self.provider.source
+        )
         # Persist ticker rows as quotes + symbols in one pass — this is the
         # bulk-refresh path that replaces per-symbol scraping.
         tickers = payload.get("tickers") or []
@@ -62,7 +64,9 @@ class MarketDataService:
             await self._bulk_upsert_from_market_watch(tickers)
         return payload
 
-    async def _bulk_upsert_from_market_watch(self, tickers: list[dict[str, Any]]) -> None:
+    async def _bulk_upsert_from_market_watch(
+        self, tickers: list[dict[str, Any]]
+    ) -> None:
         for row in tickers:
             try:
                 await self.repo.upsert_symbol(
@@ -90,7 +94,9 @@ class MarketDataService:
                     )
                 )
             except Exception as exc:  # never let one bad row kill the whole tick
-                log.warning("bulk upsert failed symbol=%s err=%s", row.get("symbol"), exc)
+                log.warning(
+                    "bulk upsert failed symbol=%s err=%s", row.get("symbol"), exc
+                )
 
     async def refresh_symbol(self, symbol: str) -> None:
         quote: QuoteSnapshot = await self._with_retries(
@@ -135,8 +141,28 @@ class MarketDataService:
         to_date=None,
     ) -> int:
         points: list[EodSnapshot] = []
-        for point in await self.provider.fetch_eod(symbol, from_date=from_date, to_date=to_date):
+        for point in await self.provider.fetch_eod(
+            symbol, from_date=from_date, to_date=to_date
+        ):
             points.append(point)
+        history_points = [
+            TimeseriesPoint(
+                symbol=point.symbol,
+                interval="eod",
+                period_start=point.source_timestamp
+                or datetime.combine(point.date, time.min, tzinfo=timezone.utc),
+                open=point.open,
+                high=point.high,
+                low=point.low,
+                close=point.close,
+                volume=point.volume,
+                source_timestamp=point.source_timestamp,
+                source=point.source,
+                raw=point.raw,
+            )
+            for point in points
+        ]
+        await self.repo.upsert_history_points(history_points)
         return await self.repo.upsert_eod_records(points)
 
     async def prune_old_quotes(self) -> int:

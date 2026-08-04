@@ -1,18 +1,42 @@
 from __future__ import annotations
 
 import time
-from collections import OrderedDict, defaultdict, deque
+from collections import OrderedDict, deque
 from threading import Lock
 from typing import Deque, Iterable
 
 from fastapi import Request
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 # Paths that are exempt from rate limiting. Match must be EXACT (or under the
 # API prefix). Suffix matching like ".endswith('/health')" made it too easy to
 # craft bypass paths like `/foo/health` (BUG-7).
 _EXEMPT_PATHS = {"/v1/health", "/v1/status", "/health", "/status"}
+
+
+class HeadMethodMiddleware:
+    """Serve HEAD through the matching GET route while suppressing the body."""
+
+    def __init__(self, app: ASGIApp) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http" or scope.get("method") != "HEAD":
+            await self.app(scope, receive, send)
+            return
+
+        get_scope = dict(scope)
+        get_scope["method"] = "GET"
+
+        async def send_without_body(message: Message) -> None:
+            if message["type"] == "http.response.body":
+                message = dict(message)
+                message["body"] = b""
+            await send(message)
+
+        await self.app(get_scope, receive, send_without_body)
 
 
 class _WindowLimiter:

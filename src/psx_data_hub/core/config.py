@@ -58,7 +58,11 @@ class Settings(BaseSettings):
     provider_base_url: str = "https://dps.psx.com.pk"
     provider_quote_url_template: str = "{provider_base_url}/company/{symbol}"
     provider_market_summary_url: str = "{provider_base_url}/market-watch"
-    provider_timeseries_url_template: str = "{provider_base_url}/timeseries/{interval}/{symbol}"
+    provider_indices_url: str = "{provider_base_url}/indices"
+    provider_market_status_url: str = "{provider_base_url}/"
+    provider_timeseries_url_template: str = (
+        "{provider_base_url}/timeseries/{interval}/{symbol}"
+    )
 
     data_source_notice: str = "Data is delayed by at least 5 minutes."
     allowed_origins: List[str] | str = Field(default_factory=list)
@@ -117,12 +121,16 @@ class Settings(BaseSettings):
     @field_validator(
         "provider_quote_url_template",
         "provider_market_summary_url",
+        "provider_indices_url",
+        "provider_market_status_url",
         "provider_timeseries_url_template",
     )
     @classmethod
     def _expand_provider_templates(cls, value: str, info: Any) -> str:
         data = getattr(info, "data", {}) or {}
-        base_url = str(data.get("provider_base_url", "https://dps.psx.com.pk")).rstrip("/")
+        base_url = str(data.get("provider_base_url", "https://dps.psx.com.pk")).rstrip(
+            "/"
+        )
         expanded = value.replace("{provider_base_url}", base_url)
         expanded = expanded.replace("{PROVIDER_BASE_URL}", base_url)
         expanded = expanded.replace("{{provider_base_url}}", base_url)

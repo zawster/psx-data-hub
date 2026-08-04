@@ -2,7 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime, date
 
-from sqlalchemy import Boolean, Date, DateTime, Float, Integer, JSON, String, UniqueConstraint
+from sqlalchemy import (
+    Boolean,
+    Date,
+    DateTime,
+    Float,
+    Index,
+    Integer,
+    JSON,
+    String,
+    UniqueConstraint,
+)
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column
 from sqlalchemy.sql import func
 
@@ -22,14 +32,18 @@ class Symbol(Base):
         DateTime(timezone=True), server_default=func.now(), nullable=False
     )
     updated_at: Mapped[datetime] = mapped_column(
-        DateTime(timezone=True), default=func.now(), onupdate=func.now(), server_default=func.now(), nullable=False
+        DateTime(timezone=True),
+        default=func.now(),
+        onupdate=func.now(),
+        server_default=func.now(),
+        nullable=False,
     )
 
 
 class StockQuote(Base):
     __tablename__ = "stock_quotes"
     __table_args__ = (
-        UniqueConstraint("symbol", "source_timestamp", name="uq_stock_quote_symbol_ts"),
+        Index("uq_stock_quote_symbol_ts", "symbol", "source_timestamp", unique=True),
     )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
@@ -43,27 +57,39 @@ class StockQuote(Base):
     high: Mapped[float | None] = mapped_column(Float, nullable=True)
     low: Mapped[float | None] = mapped_column(Float, nullable=True)
     close: Mapped[float | None] = mapped_column("close_price", Float, nullable=True)
-    source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    source_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
     source: Mapped[str] = mapped_column(String(80), default="psx")
     raw_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
 
 class HistoryPoint(Base):
     __tablename__ = "history_points"
-    __table_args__ = (UniqueConstraint("symbol", "interval", "period_start", name="uq_history_point"),)
+    __table_args__ = (
+        UniqueConstraint("symbol", "interval", "period_start", name="uq_history_point"),
+    )
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     symbol: Mapped[str] = mapped_column(String(20), index=True, nullable=False)
     interval: Mapped[str] = mapped_column(String(16), index=True, nullable=False)
-    period_start: Mapped[datetime] = mapped_column(DateTime(timezone=True), index=True, nullable=False)
+    period_start: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), index=True, nullable=False
+    )
     open: Mapped[float | None] = mapped_column(Float, nullable=True)
     high: Mapped[float | None] = mapped_column(Float, nullable=True)
     low: Mapped[float | None] = mapped_column(Float, nullable=True)
     close: Mapped[float | None] = mapped_column(Float, nullable=True)
     volume: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    source_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
     source: Mapped[str] = mapped_column(String(80), default="psx")
     raw_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
@@ -80,8 +106,12 @@ class EodRecord(Base):
     low: Mapped[float | None] = mapped_column(Float, nullable=True)
     close: Mapped[float | None] = mapped_column(Float, nullable=True)
     volume: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    source_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
     source: Mapped[str] = mapped_column(String(80), default="psx")
     raw_payload: Mapped[dict | None] = mapped_column(JSON, nullable=True)
 
@@ -91,6 +121,10 @@ class MarketSnapshot(Base):
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
     payload: Mapped[dict] = mapped_column(JSON, nullable=False)
-    source_timestamp: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
-    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), index=True)
+    source_timestamp: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+    fetched_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), server_default=func.now(), index=True
+    )
     source: Mapped[str] = mapped_column(String(80), default="psx")

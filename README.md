@@ -135,9 +135,9 @@ docker compose --profile smoke up --build --abort-on-container-exit --exit-code-
 - Endpoint parsing and formats may need adjustments if upstream pages change.
 - This is designed for delayed/public-safe consumption patterns.
 - **v0.2.0 (2026-08-03)** — provider rewritten against the actual `dps.psx.com.pk` endpoints:
-  - Market snapshot now comes from `/market-watch` (494-row HTML table) instead of the non-existent `/market-summary`.
+  - Quotes come from `/market-watch`; index values come from `/indices`; market state and trade totals come from the homepage Regular-market card.
   - Time series is fetched from `/timeseries/{int|eod}/{symbol}` — the `/company/{sym}` page is a static profile and no longer scraped for prices.
-  - One market-watch fetch populates quotes for every listed symbol; `MARKET_WATCHLIST` is now only used to opt-in additional per-symbol time-series polling.
+  - One market-watch fetch populates quotes for every listed symbol; `MARKET_WATCHLIST` opts symbols into intraday and EOD polling.
 
 ## License
 

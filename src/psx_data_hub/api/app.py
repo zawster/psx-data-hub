@@ -58,6 +58,7 @@ def create_app() -> FastAPI:
         openapi_url=openapi_url,
     )
 
+    app.add_middleware(HeadMethodMiddleware)
     if settings.hide_server_header:
         app.add_middleware(HideServerHeaderMiddleware)
 
