@@ -31,9 +31,19 @@ async def test_market_overview_combines_authoritative_psx_pages(monkeypatch):
       <div class="markets__item__stat"><div class="markets__item__stat__label">Value</div><div>9,368,281,234.67</div></div>
     </a></div>
     """
+    sectors = """
+    <table><tr><th>Sector Code</th><th>Sector Name</th><th>Turnover</th></tr>
+    <tr><td>0821</td><td>OIL &amp; GAS MARKETING COMPANIES</td><td>2,944,798</td></tr>
+    </table>
+    """
 
     def handler(request: httpx.Request) -> httpx.Response:
-        pages = {"/market-watch": market_watch, "/indices": indices, "/": status}
+        pages = {
+            "/market-watch": market_watch,
+            "/indices": indices,
+            "/": status,
+            "/sector-summary": sectors,
+        }
         return httpx.Response(
             200, text=pages[request.url.path], headers={"content-type": "text/html"}
         )
@@ -50,11 +60,17 @@ async def test_market_overview_combines_authoritative_psx_pages(monkeypatch):
         "psx_data_hub.providers.psx_dps_provider.settings.provider_market_status_url",
         "https://dps.test/",
     )
+    monkeypatch.setattr(
+        "psx_data_hub.providers.psx_dps_provider.settings.provider_sector_summary_url",
+        "https://dps.test/sector-summary",
+    )
     async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
         payload, fetched_at = await PsxDpsProvider(client).fetch_market_overview()
 
     assert fetched_at is not None
     assert payload["tickers"][0]["current"] == 353.49
+    assert payload["tickers"][0]["sector_code"] == "0821"
+    assert payload["tickers"][0]["sector"] == "OIL & GAS MARKETING COMPANIES"
     assert payload["indices"][0]["symbol"] == "KSE100"
     assert payload["indices"][0]["value"] == 178129.37
     assert payload["market_status"] == "open"

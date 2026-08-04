@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     provider_market_summary_url: str = "{provider_base_url}/market-watch"
     provider_indices_url: str = "{provider_base_url}/indices"
     provider_market_status_url: str = "{provider_base_url}/"
+    provider_sector_summary_url: str = "{provider_base_url}/sector-summary"
     provider_timeseries_url_template: str = (
         "{provider_base_url}/timeseries/{interval}/{symbol}"
     )
@@ -123,6 +124,7 @@ class Settings(BaseSettings):
         "provider_market_summary_url",
         "provider_indices_url",
         "provider_market_status_url",
+        "provider_sector_summary_url",
         "provider_timeseries_url_template",
     )
     @classmethod

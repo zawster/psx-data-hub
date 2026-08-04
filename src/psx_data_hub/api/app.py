@@ -8,7 +8,6 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from psx_data_hub.api.middleware import (
     HeadMethodMiddleware,
-    HideServerHeaderMiddleware,
     RateLimitMiddleware,
 )
 from psx_data_hub.api.routes import compat, health, indices, market, stocks
@@ -59,8 +58,6 @@ def create_app() -> FastAPI:
     )
 
     app.add_middleware(HeadMethodMiddleware)
-    if settings.hide_server_header:
-        app.add_middleware(HideServerHeaderMiddleware)
 
     app.add_middleware(
         CORSMiddleware,

@@ -131,13 +131,3 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 },
             )
         return await call_next(request)
-
-
-class HideServerHeaderMiddleware(BaseHTTPMiddleware):
-    """Drop the `Server: uvicorn` header on outgoing responses (BUG-23)."""
-
-    async def dispatch(self, request: Request, call_next):
-        response = await call_next(request)
-        if "server" in response.headers:
-            del response.headers["server"]
-        return response

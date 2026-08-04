@@ -12,6 +12,7 @@ def main() -> None:
         host="0.0.0.0",
         port=8000,
         reload=settings.env == "local",
+        server_header=not settings.hide_server_header,
     )
 
 

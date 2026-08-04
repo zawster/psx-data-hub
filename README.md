@@ -21,7 +21,7 @@ pip install -r requirements.txt
 ```
 
 ```bash
-uvicorn psx_data_hub.main:app --reload
+uvicorn psx_data_hub.main:app --reload --no-server-header
 ```
 
 ```bash

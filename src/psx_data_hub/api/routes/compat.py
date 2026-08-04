@@ -334,7 +334,9 @@ async def get_company_description(company: str, repo: DataRepository = Depends(g
     src_ts = _ensure_utc(quote.source_timestamp) if quote and quote.source_timestamp else None
     return {
         "symbol": symbol,
-        "name": (quote.name if quote else None) or (symbol_row.name if symbol_row else None),
+        "name": (quote.name if quote else None)
+        or (symbol_row.name if symbol_row else None)
+        or symbol,
         "sector": symbol_row.sector if symbol_row else None,
         "description": None,
         "source": quote.source if quote else None,

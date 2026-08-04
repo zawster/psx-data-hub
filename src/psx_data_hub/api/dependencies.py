@@ -35,15 +35,17 @@ def _api_key_matches(candidate: str | None) -> bool:
     return match
 
 
-def require_api_key(api_key: Annotated[str | None, Depends(api_key_header)]):
-    if not settings.api_key_required:
-        return "public"
-    if not _api_key_matches(api_key):
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or missing X-API-Key",
-        )
-    return api_key
+def require_api_key(
+    api_key: Annotated[str | None, Depends(api_key_header)],
+    token: Annotated[str | None, Depends(oauth2_bearer)] = None,
+):
+    """Apply the same configured auth policy used by compatibility routes.
+
+    The historical name is retained because all `/v1` routers import it, but
+    `AUTH_MODE` is authoritative for the whole API. `API_KEY_REQUIRED` remains
+    the backwards-compatible switch used when authentication mode is `off`.
+    """
+    return require_auth(api_key=api_key, token=token)
 
 
 def require_auth(

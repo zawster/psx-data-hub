@@ -143,9 +143,11 @@ def test_service_contract_off_mode(seeded_client_factory):
             "/v1/indices",
             "/status",
         ]:
+            get_response = client.get(path)
             head = client.head(path)
             assert head.status_code == 200
             assert head.content == b""
+            assert int(head.headers["content-length"]) == len(get_response.content)
 
 
 def test_compat_token_flow(seeded_client_factory):

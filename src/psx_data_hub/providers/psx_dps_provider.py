@@ -43,6 +43,11 @@ _INDEX_HEADERS = {
     "change_pct": {"% change", "change (%)", "change%", "%chg"},
 }
 
+_SECTOR_HEADERS = {
+    "code": {"sector code", "code"},
+    "name": {"sector name", "name"},
+}
+
 
 def _num(value: Any) -> float | int | None:
     if value is None:
@@ -88,6 +93,7 @@ class PsxDpsProvider(StockMarketDataProvider):
             },
         )
         self._latest_watch: dict[str, dict[str, Any]] = {}
+        self._sector_names: dict[str, str] = {}
 
     async def close(self) -> None:
         if self._owned_client:
@@ -139,7 +145,7 @@ class PsxDpsProvider(StockMarketDataProvider):
         return idx
 
     def _parse_market_watch_html(
-        self, html: str
+        self, html: str, sector_names: dict[str, str] | None = None
     ) -> tuple[list[dict[str, Any]], datetime]:
         soup = BeautifulSoup(html, "lxml")
         table = soup.find("table")
@@ -177,10 +183,15 @@ class PsxDpsProvider(StockMarketDataProvider):
                 i = idx.get(key)
                 return cells[i] if i is not None and i < len(cells) else None
 
+            sector_code = (col("sector") or "").strip()
+
             parsed.append(
                 {
                     "symbol": symbol_raw,
-                    "sector": (col("sector") or "").strip() or None,
+                    "sector": (sector_names or {}).get(sector_code)
+                    or sector_code
+                    or None,
+                    "sector_code": sector_code or None,
                     "listed_in": (col("listed_in") or "").strip() or None,
                     "ldcp": _num(col("ldcp")),
                     "open": _num(col("open")),
@@ -247,6 +258,49 @@ class PsxDpsProvider(StockMarketDataProvider):
             raise ProviderParseError("indices: no valid rows found")
         return parsed
 
+    def _parse_sector_names_html(self, html: str) -> dict[str, str]:
+        soup = BeautifulSoup(html, "lxml")
+        for table in soup.find_all("table"):
+            rows = table.find_all("tr")
+            if not rows:
+                continue
+            headers = [
+                cell.get_text(" ", strip=True)
+                for cell in rows[0].find_all(["th", "td"])
+            ]
+            idx = self._classify_header(headers, _SECTOR_HEADERS)
+            if "code" not in idx or "name" not in idx:
+                continue
+
+            sectors: dict[str, str] = {}
+            for row in rows[1:]:
+                cells = [
+                    cell.get_text(" ", strip=True)
+                    for cell in row.find_all(["th", "td"])
+                ]
+                if len(cells) < max(idx.values()) + 1:
+                    continue
+                code = cells[idx["code"]].strip()
+                name = cells[idx["name"]].strip()
+                if code and name:
+                    sectors[code] = name
+            if sectors:
+                return sectors
+        raise ProviderParseError("sector-summary: sector code/name table not found")
+
+    async def _fetch_sector_names(self) -> dict[str, str]:
+        try:
+            kind, payload = await self._fetch(settings.provider_sector_summary_url)
+            if kind != "html":
+                raise ProviderParseError(
+                    f"sector-summary: expected HTML response, got {kind}"
+                )
+            self._sector_names = self._parse_sector_names_html(str(payload))
+        except (ProviderPermanentError, ProviderTemporaryError, ProviderParseError):
+            # Sector labels improve presentation but must not make quote refreshes fail.
+            pass
+        return self._sector_names
+
     def _parse_regular_market_html(self, html: str) -> dict[str, Any]:
         soup = BeautifulSoup(html, "lxml")
         regular = soup.select_one('[data-key="REG"] .markets__item')
@@ -282,10 +336,11 @@ class PsxDpsProvider(StockMarketDataProvider):
         }
 
     async def fetch_market_overview(self) -> tuple[dict[str, Any], datetime | None]:
-        market_watch, indices_page, status_page = await asyncio.gather(
+        market_watch, indices_page, status_page, sector_names = await asyncio.gather(
             self._fetch(settings.provider_market_summary_url),
             self._fetch(settings.provider_indices_url),
             self._fetch(settings.provider_market_status_url),
+            self._fetch_sector_names(),
         )
         for source_name, (kind, _payload) in {
             "market-watch": market_watch,
@@ -297,7 +352,9 @@ class PsxDpsProvider(StockMarketDataProvider):
                     f"{source_name}: expected HTML response, got {kind}"
                 )
 
-        rows, ts = self._parse_market_watch_html(str(market_watch[1]))
+        rows, ts = self._parse_market_watch_html(
+            str(market_watch[1]), sector_names=sector_names
+        )
         indices = self._parse_indices_html(str(indices_page[1]))
         market_stats = self._parse_regular_market_html(str(status_page[1]))
 
