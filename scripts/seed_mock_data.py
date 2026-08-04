@@ -100,7 +100,7 @@ async def _seed() -> None:
             [
                 TimeseriesPoint(
                     symbol="PSO",
-                    interval="5m",
+                    interval="int",
                     period_start=now - timedelta(minutes=15),
                     open=323.0,
                     high=326.0,
@@ -112,7 +112,7 @@ async def _seed() -> None:
                 ),
                 TimeseriesPoint(
                     symbol="PSO",
-                    interval="5m",
+                    interval="int",
                     period_start=now - timedelta(minutes=10),
                     open=324.5,
                     high=328.0,

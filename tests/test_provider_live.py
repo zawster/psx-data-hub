@@ -14,6 +14,7 @@ import os
 
 import httpx
 import pytest
+import pytest_asyncio
 
 LIVE = os.environ.get("PSX_LIVE") == "1"
 
@@ -21,7 +22,7 @@ LIVE = os.environ.get("PSX_LIVE") == "1"
 pytestmark = pytest.mark.skipif(not LIVE, reason="set PSX_LIVE=1 to run live checks")
 
 
-@pytest.fixture
+@pytest_asyncio.fixture
 async def client():
     async with httpx.AsyncClient(
         timeout=15.0,
@@ -48,6 +49,20 @@ async def test_market_watch_returns_price_table(client):
     # Every row has a numeric current price.
     for row in tickers[:20]:
         assert isinstance(row.get("current"), (int, float))
+
+
+@pytest.mark.asyncio
+async def test_indices_endpoint_returns_named_indices(client):
+    from psx_data_hub.providers.psx_dps_provider import PsxDpsProvider
+
+    provider = PsxDpsProvider(client=client)
+    payload, _ = await provider.fetch_market_overview()
+    indices = payload.get("indices") or []
+    assert len(indices) > 0, "expected at least one index row from /indices"
+    names = {row["symbol"] for row in indices}
+    assert "KSE100" in names, f"KSE100 missing from indices: {names}"
+    for row in indices[:5]:
+        assert isinstance(row.get("value"), (int, float))
 
 
 @pytest.mark.asyncio

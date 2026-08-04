@@ -117,3 +117,34 @@ class HideServerHeaderMiddleware(BaseHTTPMiddleware):
         if "server" in response.headers:
             del response.headers["server"]
         return response
+
+
+class HeadMethodMiddleware:
+    """Serve HEAD by dispatching the corresponding GET and dropping the body.
+
+    FastAPI/Starlette do not auto-generate HEAD for GET routes. Rewriting the
+    method in the ASGI scope before it hits the router gets us RFC-9110-compliant
+    HEAD support for every read endpoint without touching route decorators.
+    """
+
+    def __init__(self, app):
+        self.app = app
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") != "http" or scope.get("method") != "HEAD":
+            return await self.app(scope, receive, send)
+
+        new_scope = dict(scope)
+        new_scope["method"] = "GET"
+
+        async def send_head(message):
+            if message.get("type") == "http.response.body":
+                # Drop the body but keep the response terminated.
+                message = {
+                    "type": "http.response.body",
+                    "body": b"",
+                    "more_body": False,
+                }
+            await send(message)
+
+        await self.app(new_scope, receive, send_head)

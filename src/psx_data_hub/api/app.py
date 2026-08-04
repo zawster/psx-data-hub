@@ -6,7 +6,11 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from psx_data_hub.api.middleware import HideServerHeaderMiddleware, RateLimitMiddleware
+from psx_data_hub.api.middleware import (
+    HeadMethodMiddleware,
+    HideServerHeaderMiddleware,
+    RateLimitMiddleware,
+)
 from psx_data_hub.api.routes import compat, health, indices, market, stocks
 from psx_data_hub.core.config import settings
 from psx_data_hub.core.database import AsyncSessionLocal, init_db
@@ -56,6 +60,10 @@ def create_app() -> FastAPI:
 
     if settings.hide_server_header:
         app.add_middleware(HideServerHeaderMiddleware)
+
+    # HEAD-to-GET rewrite must sit above all routing so it applies to every
+    # read endpoint (BUG-16 / review round 2).
+    app.add_middleware(HeadMethodMiddleware)
 
     app.add_middleware(
         CORSMiddleware,

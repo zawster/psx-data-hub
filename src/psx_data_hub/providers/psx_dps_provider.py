@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 from datetime import date, datetime, timezone
-from typing import Any, Iterable
+from typing import Any
 
 from bs4 import BeautifulSoup
 import httpx
@@ -174,6 +174,59 @@ class PsxDpsProvider(StockMarketDataProvider):
         # We don't have a source timestamp in the HTML; use "now" as fetched_at.
         return parsed, datetime.now(timezone.utc)
 
+    def _parse_indices_html(self, html: str) -> list[dict[str, Any]]:
+        """Parse the standalone `/indices` page.
+
+        The page has a table with header `Index | High | Low | Current | Change | % Change`
+        and one row per market index (KSE100, KSE100PR, ALLSHR, KSE30, KMI30, …).
+        """
+        soup = BeautifulSoup(html, "lxml")
+        table = soup.find("table")
+        if table is None:
+            return []
+        rows = table.find_all("tr")
+        if len(rows) < 2:
+            return []
+        # Column order is fixed on PSX's page today; check header just to be safe.
+        header = [c.get_text(" ", strip=True).lower() for c in rows[0].find_all(["th", "td"])]
+        expected_prefix = ["index", "high", "low", "current", "change"]
+        if header[: len(expected_prefix)] != expected_prefix:
+            return []
+
+        indices: list[dict[str, Any]] = []
+        for row in rows[1:]:
+            cells = [c.get_text(" ", strip=True) for c in row.find_all(["th", "td"])]
+            if len(cells) < 6:
+                continue
+            symbol = cells[0].strip().upper()
+            if not re.fullmatch(r"[A-Z0-9._-]{1,32}", symbol):
+                continue
+            indices.append(
+                {
+                    "symbol": symbol,
+                    "name": symbol,
+                    "high": _num(cells[1]),
+                    "low": _num(cells[2]),
+                    "value": _num(cells[3]),
+                    "change": _num(cells[4]),
+                    "changePct": _num(cells[5]),
+                    "change_pct": _num(cells[5]),
+                }
+            )
+        return indices
+
+    async def _fetch_indices(self) -> list[dict[str, Any]]:
+        """Fetch the `/indices` page. Returns [] on any failure — indices are
+        a soft dependency of market overview."""
+        try:
+            base = settings.provider_base_url.rstrip("/")
+            kind, payload = await self._fetch(f"{base}/indices")
+        except Exception:
+            return []
+        if kind != "html":
+            return []
+        return self._parse_indices_html(str(payload))
+
     async def fetch_market_overview(self) -> tuple[dict[str, Any], datetime | None]:
         kind, payload = await self._fetch(settings.provider_market_summary_url)
         if kind != "html":
@@ -186,16 +239,25 @@ class PsxDpsProvider(StockMarketDataProvider):
         # from the same fetch instead of re-scraping.
         self._latest_watch = {row["symbol"]: row for row in rows}
 
-        indices, tickers = _split_indices_and_tickers(rows)
-        aggregates = _aggregate_metrics(tickers)
+        indices = await self._fetch_indices()
+        total_volume = sum(
+            int(row["volume"])
+            for row in rows
+            if isinstance(row.get("volume"), (int, float))
+        )
+
+        # `market_status` and `trades` are NOT available from /market-watch. We
+        # intentionally return "unknown" and null instead of guessing — the
+        # previous code inferred "open" whenever any row was present and
+        # counted ticker rows as trades, which was wrong after market close.
         return (
             {
                 "indices": indices,
-                "tickers": tickers,
-                "total_volume": aggregates["total_volume"],
-                "trades": aggregates["trades"],
-                "market_status": aggregates["market_status"],
-                "status": aggregates["market_status"],
+                "tickers": rows,
+                "total_volume": total_volume,
+                "trades": None,
+                "market_status": "unknown",
+                "status": "unknown",
             },
             ts,
         )
@@ -259,14 +321,25 @@ class PsxDpsProvider(StockMarketDataProvider):
     def _parse_timeseries_json(
         self, symbol: str, interval: str, payload: Any
     ) -> list[TimeseriesPoint]:
+        # Anything that's not a dict with a `data` list is malformed. Surface
+        # that as a parse error so upstream schema drift is noisy rather than
+        # silently returning [] (round-2 review finding).
         if not isinstance(payload, dict):
-            raise ProviderParseError(f"timeseries: unexpected payload type {type(payload)}")
-        if payload.get("status") not in (1, "1", "ok", True):
-            # No data / disabled — return empty rather than raise, so the caller can decide.
+            raise ProviderParseError(
+                f"timeseries: unexpected payload type {type(payload).__name__}"
+            )
+        if "data" not in payload:
+            raise ProviderParseError(
+                f"timeseries: response missing 'data' key; keys={list(payload)[:5]}"
+            )
+        if payload.get("status") not in (1, "1", "ok", True, None):
+            # Provider explicitly reported an error status — legitimate empty.
             return []
         raw_rows = payload.get("data")
         if not isinstance(raw_rows, list):
-            return []
+            raise ProviderParseError(
+                f"timeseries: 'data' is {type(raw_rows).__name__}, expected list"
+            )
 
         points: list[TimeseriesPoint] = []
         for row in raw_rows:
@@ -330,51 +403,3 @@ class PsxDpsProvider(StockMarketDataProvider):
         return output
 
 
-# --- Helpers -----------------------------------------------------------------
-
-_INDEX_MARKERS = {
-    "KSE100", "KSE30", "KSE200", "KMI30", "KMIALLSHR", "ALLSHR",
-    "MII30", "MZNPI", "PSXDIV20", "BKTI", "OGTI", "NBPPGI", "NITPGI",
-    "KSE100PR", "JSGBKTI", "UPP9", "ACI",
-}
-
-
-def _split_indices_and_tickers(
-    rows: list[dict[str, Any]],
-) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Separate index rows from regular ticker rows.
-
-    PSX's market-watch table historically mixes some index rows in with tickers.
-    We recognise indices by symbol membership in a known set OR by an empty sector.
-    """
-    indices: list[dict[str, Any]] = []
-    tickers: list[dict[str, Any]] = []
-    for row in rows:
-        if row["symbol"] in _INDEX_MARKERS:
-            indices.append(
-                {
-                    "symbol": row["symbol"],
-                    "name": row["symbol"],
-                    "value": row.get("current"),
-                    "change": row.get("change"),
-                    "changePct": row.get("change_pct"),
-                    "change_pct": row.get("change_pct"),
-                }
-            )
-        else:
-            tickers.append(row)
-    return indices, tickers
-
-
-def _aggregate_metrics(tickers: Iterable[dict[str, Any]]) -> dict[str, Any]:
-    total_volume = 0
-    trades = 0
-    for row in tickers:
-        vol = row.get("volume")
-        if isinstance(vol, (int, float)):
-            total_volume += int(vol)
-            trades += 1
-    # Market status can't be inferred purely from market-watch; treat presence
-    # of live prices as "open", absence as "closed".
-    market_status = "open" if trades else "closed"
-    return {"total_volume": total_volume, "trades": trades, "market_status": market_status}

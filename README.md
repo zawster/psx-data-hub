@@ -63,8 +63,8 @@ docker compose up --build
 - `GET /sectors`
 - `GET /sectorgraph`
 - `GET /{company}/getalldata`
-- `GET/POST /{company}/description`
-- `GET/POST /{company}/equitydata`
+- `GET /{company}/description`
+- `GET /{company}/equitydata`
 - `GET /allindices`
 - `GET /getindex?symbol=KSE100`
 
