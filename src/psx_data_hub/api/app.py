@@ -62,10 +62,6 @@ def create_app() -> FastAPI:
     if settings.hide_server_header:
         app.add_middleware(HideServerHeaderMiddleware)
 
-    # HEAD-to-GET rewrite must sit above all routing so it applies to every
-    # read endpoint (BUG-16 / review round 2).
-    app.add_middleware(HeadMethodMiddleware)
-
     app.add_middleware(
         CORSMiddleware,
         allow_origins=_cors_origins(),

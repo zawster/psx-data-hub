@@ -46,28 +46,16 @@ async def poll_once() -> None:
             except Exception as exc:
                 log.warning("market refresh failed err=%s", exc)
 
-            # Per-symbol timeseries + EOD refresh for the watchlist (opt-in).
-            # `int` gives intraday points; `eod` populates `/v1/stocks/{sym}/eod`.
+            # Timeseries refresh for the watchlist (still per-symbol; opt-in).
             symbols = [s for s in settings.market_watchlist if s]
             for offset in range(0, len(symbols), settings.poll_symbols_per_tick):
                 chunk = symbols[offset : offset + settings.poll_symbols_per_tick]
                 for symbol in chunk:
-                    for interval in ("int", "eod"):
-                        try:
-                            # Populates `history_points` for
-                            # /v1/stocks/{sym}/history?interval={int,eod}.
-                            await service.refresh_timeseries(symbol, interval=interval)
-                        except Exception as exc:
-                            log.warning(
-                                "history refresh failed symbol=%s interval=%s err=%s",
-                                symbol, interval, exc,
-                            )
                     try:
-                        # Populates `eod_records` for /v1/stocks/{sym}/eod.
-                        await service.refresh_eod(symbol)
+                        await service.refresh_timeseries(symbol, interval="int")
                     except Exception as exc:
                         log.warning(
-                            "eod refresh failed symbol=%s err=%s", symbol, exc
+                            "timeseries refresh failed symbol=%s err=%s", symbol, exc
                         )
                     try:
                         await service.refresh_eod(symbol)
