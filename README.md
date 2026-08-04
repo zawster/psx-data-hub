@@ -141,4 +141,4 @@ docker compose --profile smoke up --build --abort-on-container-exit --exit-code-
 
 ## License
 
-MIT
+Apache License 2.0. See [LICENSE](LICENSE).
