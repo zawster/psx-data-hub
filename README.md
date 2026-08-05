@@ -16,7 +16,7 @@ A public, open-source **Pakistan Stock Exchange** API with explicit **5-minute d
 cd psx-data-hub
 cp .env.example .env
 python -m venv .venv
-.\.venv\Scripts\Activate.ps1
+source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
