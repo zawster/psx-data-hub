@@ -41,11 +41,10 @@
         <a href="#configuration">Configuration</a>
         <a href="#architecture">Architecture</a>
         <a href="#deployment">Deployment</a>
-        <a href="#github-pages">GitHub Pages</a>
       </nav>
 
       <div class="sidebar-foot">
-        Delayed public-market data.<br>
+        Public-market data API.<br>
         Apache License 2.0.<br>
         <a href="https://github.com/zawster/psx-data-hub">View source on GitHub</a>
       </div>
@@ -54,7 +53,7 @@
     <main id="top">
       <div class="content">
         <header class="hero">
-          <p class="eyebrow">Pakistan Stock Exchange / delayed feed</p>
+          <p class="eyebrow">Pakistan Stock Exchange / market data API</p>
           <h1>Market data, documented.</h1>
           <p class="hero-copy">A complete field guide to the cached PSX quote, market, index, history, EOD, authentication, compatibility, and operational APIs.</p>
           <div class="hero-actions">
@@ -65,7 +64,7 @@
 
         <div class="notice" role="note">
           <strong>Data policy</strong>
-          <span>Responses are cache-backed and designed for delayed/public-safe use. Always surface the returned delay metadata and source notice to downstream consumers.</span>
+          <span>Responses are cache-backed. Always surface the returned freshness metadata and source notice to downstream consumers.</span>
         </div>
 
         <section class="section" id="overview">
@@ -136,7 +135,7 @@ curl http://127.0.0.1:8000/v1/market \
   "source_timestamp": "2026-08-04T10:30:00Z",
   "fetched_at": "2026-08-04T10:35:03Z",
   "cache_age_seconds": 12,
-  "data_source_notice": "Data is delayed by at least 5 minutes.",
+  "data_source_notice": "&lt;configured data-source notice&gt;",
   "is_stale": false
 }</pre>
           <h3>HEAD requests</h3>
@@ -152,7 +151,7 @@ curl http://127.0.0.1:8000/v1/market \
   "database": "ok",
   "provider": "dps.psx.com.pk",
   "data_delay_minutes": 5,
-  "data_source_notice": "Data is delayed by at least 5 minutes.",
+  "data_source_notice": "&lt;configured data-source notice&gt;",
   "last_market_fetch_age_seconds": 12
 }</pre><details><summary>Operational meaning</summary><p><code>status</code> becomes <code>degraded</code> and <code>database</code> becomes <code>unreachable</code> when the database probe fails. A high or null fetch age indicates that the worker is stalled or has not completed its first cycle.</p></details></div></article>
 
@@ -160,7 +159,7 @@ curl http://127.0.0.1:8000/v1/market \
   "status": "ok",
   "provider": "dps.psx.com.pk",
   "data_delay_minutes": 5,
-  "data_source_notice": "Data is delayed by at least 5 minutes."
+  "data_source_notice": "&lt;configured data-source notice&gt;"
 }</pre></div></article>
 
             <article class="endpoint" id="get-v1-market"><header class="endpoint-head"><span class="method get">GET</span><h3>/v1/market</h3><span class="tag protected">Configured auth</span></header><div class="endpoint-body"><p>Returns the newest persisted market snapshot, parsed indices, and delay metadata. The raw <code>payload</code> also contains tickers and authoritative Regular-market totals.</p><pre>curl http://127.0.0.1:8000/v1/market</pre><h4>200 response</h4><pre>{
@@ -371,21 +370,12 @@ curl http://127.0.0.1:8000/v1/market \
 docker compose --profile smoke up --build \
   --abort-on-container-exit --exit-code-from smoke-check</pre>
           <h3>Compliance posture</h3>
-          <p>The project does not ship a PSX data license. Public data terms and redistribution rules can change. Treat the feed as delayed, avoid guaranteed or premium-data claims, publish cache age and source notices, and obtain independent legal review for commercial redistribution.</p>
-        </section>
-
-        <section class="section" id="github-pages">
-          <div class="section-heading"><h2>GitHub Pages</h2><span>No build step required</span></div>
-          <p class="lede">This documentation is plain HTML, CSS, and JavaScript with a <code>.nojekyll</code> marker. GitHub can serve it directly from the repository.</p>
-          <div class="step"><span class="step-number">01</span><div><h3>Merge the documentation</h3><p>Ensure this <code>docs/</code> folder is present on the default branch.</p></div></div>
-          <div class="step"><span class="step-number">02</span><div><h3>Select the source</h3><p>Open repository <strong>Settings &gt; Pages</strong>. Under Build and deployment, select <strong>Deploy from a branch</strong>.</p></div></div>
-          <div class="step"><span class="step-number">03</span><div><h3>Publish</h3><p>Select branch <code>main</code>, folder <code>/docs</code>, and save. GitHub will display the public URL after deployment.</p></div></div>
-          <div class="notice"><strong>Path safety</strong><span>Assets use relative URLs, so the site works under the repository subpath without a custom domain or base-path configuration.</span></div>
+          <p>The project does not ship a PSX data license. Public data terms and redistribution rules can change. Respect source terms, avoid guaranteed or premium-data claims, publish cache age and source notices, and obtain independent legal review for commercial redistribution.</p>
         </section>
 
         <footer class="footer">
           <strong>psx-data-hub v0.2.0</strong><br>
-          Delayed Pakistan Stock Exchange data API. Documentation and source are licensed under Apache License 2.0.
+          Pakistan Stock Exchange data API. Documentation and source are licensed under Apache License 2.0.
         </footer>
       </div>
     </main>
