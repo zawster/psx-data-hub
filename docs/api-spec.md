@@ -1,92 +1,61 @@
-# API Spec (v1)
+# psx-data-hub API specification
 
-## Base path
+Version: `0.2.0`
 
-`/v1`
+The complete human-readable API and operations manual is the GitHub Pages-ready
+site in [`index.html`](index.html). This Markdown file provides a compact endpoint
+index for repository readers.
 
-## GET /health
+## Core v1
 
-Simple service check.
+| Method | Path | Purpose |
+|---|---|---|
+| GET/HEAD | `/v1/health` | Database readiness and worker freshness |
+| GET/HEAD | `/v1/status` | Lightweight service status |
+| GET/HEAD | `/v1/market` | Latest market snapshot and parsed indices |
+| GET/HEAD | `/v1/stocks` | Active symbol list |
+| GET/HEAD | `/v1/stocks/symbols` | Alias of the symbol list |
+| GET/HEAD | `/v1/stocks/{symbol}` | Latest cached quote |
+| GET/HEAD | `/v1/stocks/{symbol}/description` | Identity, sector, and source metadata |
+| GET/HEAD | `/v1/stocks/{symbol}/history` | Intraday or EOD time series |
+| GET/HEAD | `/v1/stocks/{symbol}/eod` | Dedicated EOD records |
+| GET/HEAD | `/v1/indices` | Latest index payload |
 
-## GET /status
+History accepts only `interval=int` or `interval=eod`. The optional `from` and
+`to` values are ISO datetimes, and `limit` must be between 1 and 5000. EOD date
+filters use `YYYY-MM-DD`.
 
-Service is running status payload.
+## Compatibility API
 
-## GET /market
+| Method | Path | Purpose |
+|---|---|---|
+| GET/HEAD | `/` | Welcome response |
+| POST | `/token` | OAuth2 password-form JWT issuance |
+| GET/HEAD | `/token-check` | Bearer-token verification |
+| GET/HEAD | `/volume` | Regular-market volume |
+| GET/HEAD | `/status` | Regular-market state |
+| GET/HEAD | `/tradesinstockmarket` | Regular-market trade count |
+| GET/HEAD | `/totalcompanies` | Active symbol count |
+| GET/HEAD | `/companiesinloss` | Negative-change company count |
+| GET/HEAD | `/companiesinprofit` | Positive-change company count |
+| GET/HEAD | `/sectors` | Company count by sector |
+| GET/HEAD | `/sectorgraph` | Average change by sector |
+| GET/HEAD | `/allindices` | Raw indices and delay metadata |
+| GET/HEAD | `/getindex?symbol=KSE100` | One index by symbol |
+| GET/HEAD | `/{company}/getalldata` | Compatibility quote view |
+| GET/HEAD | `/{company}/description` | Compatibility identity view |
+| GET/HEAD | `/{company}/equitydata` | Compatibility OHLCV view |
 
-Returns latest market snapshot with delayed metadata.
+## Shared rules
 
-Response fields:
-- `fetched_at`: timestamp when API wrote last snapshot
-- `source_timestamp`: source update time if available
-- `delay`: shared delay metadata
-- `payload`: raw parsed payload from provider
-- `indices`: parsed index points
+- Symbols are uppercased and must match `[A-Z0-9._-]{1,20}`.
+- Market-data routes honor `AUTH_MODE`: `off`, `api_key`, `jwt`, or `hybrid`.
+- `/v1/health`, `/v1/status`, `/`, and `/token` are public.
+- `/token-check` always requires a bearer token.
+- GET routes support HEAD with an empty body and GET-equivalent headers.
+- Cache-backed responses can be empty before the first successful worker cycle.
+- Consumers should inspect `delay.is_stale`, `delay.cache_age_seconds`, and the
+  configured data-source notice.
 
-## GET /stocks or /stocks/symbols
-
-Returns symbols managed by the system.
-
-## GET /stocks/{symbol}
-
-Returns latest delayed quote for symbol.
-
-## GET /stocks/{symbol}/history
-
-Query params:
-- `interval` (`5m`, `1d`, etc)
-- `from` and `to` timestamps for range
-
-## GET /stocks/{symbol}/eod
-
-Query params:
-- `from` date
-- `to` date
-
-## GET /indices
-
-Returns last seen index payload.
-
-## Legacy/compatibility endpoints (root)
-
-`/`  
-Welcome message
-
-`POST /token`  
-OAuth2 token endpoint (`application/x-www-form-urlencoded`, fields: `username`, `password`)
-
-`GET /token-check`  
-Protected endpoint to verify bearer token
-
-`GET /volume`  
-Total market volume snapshot
-
-`GET /status`  
-Market status snapshot
-
-`GET /tradesinstockmarket`  
-Trade count snapshot
-
-`GET /totalcompanies`  
-Total active listed companies/symbols
-
-`GET /companiesinloss`  
-Number of latest quotes with negative change
-
-`GET /companiesinprofit`  
-Number of latest quotes with positive change
-
-`GET /sectors`  
-Sector summaries
-
-`GET /sectorgraph`  
-Sector-level aggregate metrics
-
-`GET /allindices`  
-All index points from latest market payload
-
-`GET /getindex?symbol=`  
-Get index by symbol
-
-`{company}` endpoints  
-`GET/POST /{company}/getalldata`, `/{company}/description`, `/{company}/equitydata`
+See [`index.html`](index.html) for parameters, examples, response fields,
+authentication setup, errors, configuration, deployment, and GitHub Pages setup.
