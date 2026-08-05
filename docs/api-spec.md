@@ -2,9 +2,9 @@
 
 Version: `0.2.0`
 
-The complete human-readable API and operations manual is the GitHub Pages-ready
-site in [`index.html`](index.html). This Markdown file provides a compact endpoint
-index for repository readers.
+The complete human-readable API and operations manual is the static site in
+[`index.html`](index.html). This Markdown file provides a compact endpoint index
+for repository readers.
 
 ## Core v1
 
@@ -58,4 +58,4 @@ filters use `YYYY-MM-DD`.
   configured data-source notice.
 
 See [`index.html`](index.html) for parameters, examples, response fields,
-authentication setup, errors, configuration, deployment, and GitHub Pages setup.
+authentication setup, errors, configuration, deployment, and operations.

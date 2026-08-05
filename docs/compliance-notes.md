@@ -1,6 +1,6 @@
 # Compliance and risk notes
 
-This project is explicitly delayed-only by default. The following behavior is
+This project uses a cache-backed public-data model. The following behavior is
 required to reduce legal and operational risk:
 
 1. Never claim exchange-grade real-time data status.
@@ -13,7 +13,7 @@ required to reduce legal and operational risk:
 
 Data redistribution rules can change. If you do not hold a licensed agreement,
 assume you are in a restricted posture and:
-- keep the data clearly delayed,
+- state data timing and freshness clearly,
 - avoid premium/guaranteed SLA claims,
 - add strict usage policy terms to client onboarding,
 - obtain independent legal review before commercial redistribution.
