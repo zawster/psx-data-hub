@@ -18,5 +18,5 @@ assume you are in a restricted posture and:
 - add strict usage policy terms to client onboarding,
 - obtain independent legal review before commercial redistribution.
 
-The repository is licensed under Apache License 2.0. That software license does
+The repository is licensed under the MIT License. That software license does
 not grant rights to third-party market data or PSX trademarks.
